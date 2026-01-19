@@ -16,3 +16,6 @@ Makefile
 # 日志
 logs/
 *.log
+
+# extern
+extern/spdlog
