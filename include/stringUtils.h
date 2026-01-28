@@ -1,6 +1,6 @@
 #pragma once
 #include <algorithm>
-#include <iostream>
+#include <string>
 
 // Remove whitespace characters from both start and end of a string
 inline std::string trim(const std::string& str) {

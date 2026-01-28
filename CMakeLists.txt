@@ -12,10 +12,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 include_directories(include)
 
 add_library(tcp_socket STATIC
-    src/lib_src/tcpServer.cpp
-    src/lib_src/tcpClient.cpp
-    src/lib_src/socketUtils.cpp
-    src/lib_src/Connection.cpp
+        src/lib_src/tcpServer.cpp
+        src/lib_src/tcpClient.cpp
+        src/lib_src/socketUtils.cpp
+        src/lib_src/BaseConnection.cpp
+        src/lib_src/EpollConnection.cpp
 )
 
 target_link_directories(tcp_socket PRIVATE pthread)

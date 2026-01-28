@@ -1,11 +1,10 @@
 #pragma once
-#include "socketUtils.h"
-#include "stringUtils.h"
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <string>
 #include <thread>
+#include "../include/socketUtils.h"
 
 class Connection {
 public:
@@ -17,9 +16,9 @@ public:
 
     void start();
     void shutdown();
-    bool is_alive() const;
+    [[nodiscard]] bool is_alive() const;
     ssize_t send(const std::string& msg);
-    std::string get_peer_info() const;
+    [[nodiscard]] std::string get_peer_info() const;
 
     // Set idle timeout duration
     void set_idle_timeout(std::chrono::seconds timeout) {
@@ -27,6 +26,18 @@ public:
     }
 
     void enable_idle_timeout(bool enable) { enable_idle_timeout_ = enable; }
+
+    void update_active_time();
+
+    [[nodiscard]] int get_fd() const;
+
+    void handle_read();
+    void handle_write();
+    void handle_error();
+
+    [[nodiscard]] bool has_pending_write() const {
+        return !write_buffer_.empty();
+    }
 
 private:
     SocketPtr socket_;
@@ -37,6 +48,7 @@ private:
     std::atomic<bool> running_ { true };
 
     std::string read_buffer_;
+    std::string write_buffer_;
     static constexpr size_t READ_CHUNK_SIZE = 8192;
     // Core worker loop
     void run();

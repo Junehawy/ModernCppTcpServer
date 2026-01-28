@@ -1,4 +1,5 @@
 #include "../include/tcpClient.h"
+#include "../include/stringUtils.h"
 #include <iostream>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -10,26 +11,39 @@ int main() {
 
     try {
         TcpClient client("127.0.0.1", 9999);
-        char buf[1024];
         
         while (true) {
             std::cout << "Enter message (quit to exit): ";
-            std::cout.flush();
-            if (!fgets(buf, sizeof(buf), stdin))
-                break;
-            buf[strcspn(buf, "\n")] = '\0';
-            std::string cmd = trim(buf);
-            if (to_lower(cmd) == "quit") {
+            std::string input;
+            std::getline(std::cin, input);
+
+            if (input == "quit") {
                 client.send_message("quit");
                 break;
             }
-            client.send_message(buf);
-            std::string resp = client.receive_line();
-            if (resp.empty())
-                break;
-            spdlog::debug("Server: {}", trim(rtrim_cc(resp)));
+            if (input.empty()) continue;
+            client.send_message(input);
+
+            bool received = false;
+            for (int attempt=0;attempt<20;attempt++) {
+                try {
+                    std::string resp = client.receive_line();
+                    if (!resp.empty()) {
+                        spdlog::info("Server says: {}", trim(rtrim_cc(resp)));
+                        received = true;
+                        break;
+                    }
+                }catch (const SocketException& e) {
+                    spdlog::error("Receive attempt {} failed: {}",attempt+1, e.what());
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (!received) {
+                spdlog::warn("No message received after {} attempts",20);
+            }
         }
-    } catch (const std::exception& e) {
+    } catch (const SocketException& e) {
         spdlog::error("Client error: {}", e.what());
     }
     return 0;

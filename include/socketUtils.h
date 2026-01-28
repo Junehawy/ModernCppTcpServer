@@ -1,35 +1,15 @@
 #pragma once
-#include <algorithm>
 #include <arpa/inet.h>
-#include <atomic>
-#include <cctype>
 #include <cerrno>
-#include <condition_variable>
-#include <csignal>
 #include <cstring>
 #include <format>
 #include <memory>
 #include <mutex>
 #include <source_location>
-#include <stdexcept>
 #include <string>
 #include <sys/socket.h>
-#include <thread>
-#include <unistd.h>
-#include <vector>
 
-// Global variables for server shutdown control
-extern std::atomic<bool> g_server_should_stop;
-extern std::mutex g_shutdown_mutex;
-extern std::condition_variable g_shutdown_cv;
-
-void global_signal_handler(int sig);
-
-#ifndef LOG_ERROR
-#define LOG_ERROR(fmt, ...)                         \
-    fprintf(stderr, "[ERROR] [%s:%d %s] " fmt "\n", \
-        __FILE__, __LINE__, __func__, ##__VA_ARGS__)
-#endif
+#include "spdlog/spdlog.h"
 
 // Base exception class with location,error code and formatted message
 class BaseException : public std::exception {
@@ -107,9 +87,7 @@ struct SocketFd {
 struct SocketDeleter {
     void operator()(SocketFd* s) const noexcept {
         if (s && s->valid()) {
-            if (close(s->fd) == -1) {
-                LOG_ERROR("close fd %d failed: %s", s->fd, strerror(errno));
-            }
+            close_fd(s->fd);
             s->fd = -1; // Mark fd as invalid after close
         }
         delete s;
@@ -122,7 +100,7 @@ using SocketPtr = std::unique_ptr<SocketFd, SocketDeleter>;
 inline SocketPtr make_socket_raii(int domain, int type, int protocol) {
     int fd = socket(domain, type, protocol);
     if (fd == -1) {
-        throw SocketException("socket create failed");
+        throw SocketException("socket create failed",errno);
     }
     return SocketPtr(new SocketFd(fd), SocketDeleter {});
 }

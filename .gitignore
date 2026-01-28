@@ -19,3 +19,6 @@ logs/
 
 # extern
 extern/spdlog
+
+#backup
+backup/*

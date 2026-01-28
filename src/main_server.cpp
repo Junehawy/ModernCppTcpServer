@@ -1,5 +1,3 @@
-#include "../include/Connection.h"
-#include "../include/tcpServer.h"
 #include <iostream>
 #include <mutex>
 #include <spdlog/async.h>
@@ -7,6 +5,8 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <thread>
+#include "../include/stringUtils.h"
+#include "../include/tcpServer.h"
 
 int main() {
     try {
@@ -38,18 +38,19 @@ int main() {
     }
 
     // Track all active client connections
-    std::vector<std::shared_ptr<Connection>> active_connections;
+    std::vector<std::shared_ptr<BaseConnection>> active_connections;
     std::mutex connection_mutex;
 
     try {
-        TcpServer server(9999);
+        bool use_epoll = true;
+        TcpServer server(9999,1024,use_epoll);
 
         // Start server and define client connection handler
-        server.start([&](SocketPtr client_fd, const sockaddr_in& client_addr) {
-            auto conn = std::make_shared<Connection>(
+        server.start([&](SocketPtr client_fd, const sockaddr_in& client_addr) ->std::shared_ptr<BaseConnection> {
+            auto conn = std::make_shared<EpollConnection>(
                 std::move(client_fd), client_addr,
-                [&](Connection* self, std::string msg) {
-                    std::cout << self->get_peer_info() << " -> " << msg << "\n";
+                [&](BaseConnection* self, std::string msg) {
+                    spdlog::info("{} -> {}", self->get_peer_info(), msg);
                     std::string response = rtrim_cc(msg) + "\n";
                     self->send(response);
                 });
@@ -58,21 +59,16 @@ int main() {
             conn->enable_idle_timeout(true);
             conn->set_idle_timeout(std::chrono::seconds(60));
 
-            // Start per-connection worker thread
-            conn->start();
-
             // Add to active list
             {
                 std::lock_guard<std::mutex> lk(connection_mutex);
                 active_connections.push_back(conn);
             }
-        });
 
-        // Block main thread until shutdown signal
-        {
-            std::unique_lock<std::mutex> lock(g_shutdown_mutex);
-            g_shutdown_cv.wait(lock, [] { return g_server_should_stop.load(); });
-        }
+            spdlog::info("New connection started: {}",conn->get_peer_info());
+
+            return conn;
+        });
 
         spdlog::info("Shutdown signal received, stopping server");
 
@@ -91,7 +87,7 @@ int main() {
         }
 
         // Give connections some time to finish sending data
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::seconds(3));
 
         spdlog::info("All connections closed, server exited.");
     } catch (const std::exception& e) {
