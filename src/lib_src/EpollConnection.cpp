@@ -1,7 +1,5 @@
 #include "../../include/EpollConnection.h"
 
-#include "../../backup/Connection.h"
-
 EpollConnection::EpollConnection(SocketPtr sock, sockaddr_in addr, MessageHandler handler)
     :BaseConnection(std::move(sock),addr, std::move(handler)){  }
 
@@ -44,6 +42,85 @@ void EpollConnection::handle_read() {
         local_buffer = std::move(read_buffer_);
         read_buffer_.clear();
     }
+
+    if (has_http_handler()) {
+        if (http_state_ == HttpReadState::ReadingHeader) {
+            size_t header_end = local_buffer.find("\r\n\r\n");
+            if (header_end != std::string::npos) {
+                std::string header_part = local_buffer.substr(0, header_end + 4);
+
+                SimpleHttpRequest temp_req = parse_simple_http(header_part);
+
+                pending_header_ = std::move(header_part);
+
+                size_t body_start = header_end + 4;
+                size_t remaining = local_buffer.size() - body_start;
+
+                if (temp_req.content_length > 0) {
+                    http_state_ = HttpReadState::ReadingBody;
+                    expected_body_size_ = temp_req.content_length;
+                    pending_body_.clear();
+
+                    if (remaining > 0) {
+                        size_t take = std::min(remaining, expected_body_size_);
+                        pending_body_.append(local_buffer, body_start, take);
+                        local_buffer.erase(0, body_start + take);
+                    }
+
+                    if (pending_body_.size() < expected_body_size_) {
+                        std::unique_lock lock(buffer_mutex_);
+                        read_buffer_ = std::move(local_buffer);
+                        return;
+                    }
+                }
+
+                // body
+                SimpleHttpRequest req = parse_simple_http(pending_header_);
+                req.body = std::move(pending_body_);
+
+                process_http_request(pending_header_ + req.body);
+
+                http_state_ = HttpReadState::ReadingHeader;
+                expected_body_size_ = 0;
+                pending_header_.clear();
+                pending_body_.clear();
+
+                if (!local_buffer.empty()) {
+                    std::unique_lock lock(buffer_mutex_);
+                    read_buffer_ = std::move(local_buffer);
+                }
+                return;
+            }
+        }
+        else if (http_state_ == HttpReadState::ReadingBody) {
+            if (!local_buffer.empty()) {
+                size_t needed = expected_body_size_ - pending_body_.size();
+                size_t take = std::min(local_buffer.size(), needed);
+
+                pending_body_.append(local_buffer, 0, take);
+                local_buffer.erase(0, take);
+
+                if (pending_body_.size() >= expected_body_size_) {
+                    SimpleHttpRequest req = parse_simple_http(pending_header_);
+                    req.body = std::move(pending_body_);
+
+                    process_http_request(pending_header_ + req.body);
+
+                    http_state_ = HttpReadState::ReadingHeader;
+                    expected_body_size_ = 0;
+                    pending_header_.clear();
+                    pending_body_.clear();
+                }
+            }
+
+            if (!local_buffer.empty()) {
+                std::unique_lock lock(buffer_mutex_);
+                read_buffer_ = std::move(local_buffer);
+            }
+            return;
+        }
+    }
+
     size_t pos;
     while ((pos = local_buffer.find('\n')) != std::string::npos) {
         std::string line = local_buffer.substr(0, pos);
@@ -91,4 +168,24 @@ void EpollConnection::handle_write() {
 void EpollConnection::handle_error() {
     spdlog::error("{} connection error, closing", get_peer_info());
     shutdown();
+}
+
+void EpollConnection::set_http_handler(HttpMessageHandler handler) {
+    http_handler_ = std::move(handler);
+}
+
+bool EpollConnection::has_http_handler() const {
+    return http_handler_ != nullptr;
+}
+
+void EpollConnection::process_http_request(const std::string& raw_request) {
+    if (!http_handler_) {
+        if (message_handler_) {
+            message_handler_(this, raw_request);
+        }
+        return;
+    }
+
+    SimpleHttpRequest parsed = parse_simple_http(raw_request);
+    http_handler_(this, raw_request, parsed);
 }

@@ -1,7 +1,6 @@
 #pragma once
 #include <functional>
 #include <thread>
-#include "../backup/Connection.h"
 #include "EpollConnection.h"
 #include "socketUtils.h"
 

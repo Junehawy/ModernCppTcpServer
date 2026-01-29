@@ -1,0 +1,92 @@
+[
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/tcp_socket.dir/src/lib_src/tcpServer.cpp.o -c /home/zora/code/C++/modern_cs_project/src/lib_src/tcpServer.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/lib_src/tcpServer.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/tcp_socket.dir/src/lib_src/tcpServer.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/tcp_socket.dir/src/lib_src/tcpClient.cpp.o -c /home/zora/code/C++/modern_cs_project/src/lib_src/tcpClient.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/lib_src/tcpClient.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/tcp_socket.dir/src/lib_src/tcpClient.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/tcp_socket.dir/src/lib_src/socketUtils.cpp.o -c /home/zora/code/C++/modern_cs_project/src/lib_src/socketUtils.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/lib_src/socketUtils.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/tcp_socket.dir/src/lib_src/socketUtils.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/tcp_socket.dir/src/lib_src/BaseConnection.cpp.o -c /home/zora/code/C++/modern_cs_project/src/lib_src/BaseConnection.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/lib_src/BaseConnection.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/tcp_socket.dir/src/lib_src/BaseConnection.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/tcp_socket.dir/src/lib_src/EpollConnection.cpp.o -c /home/zora/code/C++/modern_cs_project/src/lib_src/EpollConnection.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/lib_src/EpollConnection.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/tcp_socket.dir/src/lib_src/EpollConnection.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/tcp_socket.dir/src/lib_src/http_types.cpp.o -c /home/zora/code/C++/modern_cs_project/src/lib_src/http_types.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/lib_src/http_types.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/tcp_socket.dir/src/lib_src/http_types.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/server.dir/src/main_server.cpp.o -c /home/zora/code/C++/modern_cs_project/src/main_server.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/main_server.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/server.dir/src/main_server.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o CMakeFiles/client.dir/src/main_client.cpp.o -c /home/zora/code/C++/modern_cs_project/src/main_client.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/src/main_client.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/CMakeFiles/client.dir/src/main_client.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/spdlog.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/spdlog.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/spdlog.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/spdlog.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/stdout_sinks.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/stdout_sinks.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/color_sinks.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/color_sinks.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/color_sinks.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/color_sinks.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/file_sinks.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/file_sinks.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/file_sinks.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/file_sinks.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/async.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/async.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/async.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/async.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/cfg.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/cfg.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/cfg.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/cfg.cpp.o"
+},
+{
+  "directory": "/home/zora/code/C++/modern_cs_project/cmake-build-debug",
+  "command": "/usr/bin/c++ -DSPDLOG_COMPILED_LIB -DSPDLOG_FWRITE_UNLOCKED -I/home/zora/code/C++/modern_cs_project/include -I/home/zora/code/C++/modern_cs_project/extern/spdlog/include -g -std=c++20 -fdiagnostics-color=always -o extern/spdlog/CMakeFiles/spdlog.dir/src/bundled_fmtlib_format.cpp.o -c /home/zora/code/C++/modern_cs_project/extern/spdlog/src/bundled_fmtlib_format.cpp",
+  "file": "/home/zora/code/C++/modern_cs_project/extern/spdlog/src/bundled_fmtlib_format.cpp",
+  "output": "/home/zora/code/C++/modern_cs_project/cmake-build-debug/extern/spdlog/CMakeFiles/spdlog.dir/src/bundled_fmtlib_format.cpp.o"
+}
+]
