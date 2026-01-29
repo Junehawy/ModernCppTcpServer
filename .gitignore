@@ -5,8 +5,10 @@ lib/
 *.o
 *.a
 *.so
+.idea/*
 
 # CMake 生成的文件
+cmake-build-debug/*
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -22,3 +24,4 @@ extern/spdlog
 
 #backup
 backup/*
+
