@@ -16,7 +16,7 @@ int main() {
         spdlog::init_thread_pool(8192, 1);
 
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        console_sink->set_level(spdlog::level::debug);
+        console_sink->set_level(spdlog::level::off);
         console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%t] %v");
 
         auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>("logs/server.log", 10 * 1024 * 1024, 5);
@@ -43,7 +43,7 @@ int main() {
 
     try {
         bool use_epoll = true;
-        TcpServer server(9999, 1024, use_epoll);
+        TcpServer server(9999, 1024, use_epoll,7);
 
         // Start server and define client connection handler
         server.start([&](SocketPtr client_fd, const sockaddr_in &client_addr) -> std::shared_ptr<BaseConnection> {

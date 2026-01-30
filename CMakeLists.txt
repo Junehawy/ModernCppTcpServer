@@ -18,6 +18,7 @@ add_library(tcp_socket STATIC
         src/lib_src/BaseConnection.cpp
         src/lib_src/EpollConnection.cpp
         src/lib_src/http_types.cpp
+        src/lib_src/SubReactor.cpp
 )
 
 target_link_directories(tcp_socket PRIVATE pthread)

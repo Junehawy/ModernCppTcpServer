@@ -7,6 +7,7 @@
 #include <mutex>
 #include <source_location>
 #include <string>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 
 #include "spdlog/spdlog.h"
@@ -66,7 +67,7 @@ public:
 };
 
 
-bool set_reuse_addr(int sockid);
+bool set_reuse_addr(int fd);
 
 ssize_t writen(int fd, const void* data, size_t len);
 
@@ -103,4 +104,12 @@ inline SocketPtr make_socket_raii(int domain, int type, int protocol) {
         throw SocketException("socket create failed",errno);
     }
     return SocketPtr(new SocketFd(fd), SocketDeleter {});
+}
+
+namespace socket_utils {
+    void add_epoll(int epfd,int fd,uint32_t events = EPOLLIN | EPOLLET);
+    void mod_epoll(int epfd,int fd,uint32_t events);
+    void del_epoll(int epfd,int fd);
+
+    void check_syscall(int ret,const std::string& msg,bool throw_on_fail = true);
 }

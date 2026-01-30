@@ -2,14 +2,15 @@
 #include <functional>
 #include <thread>
 #include "EpollConnection.h"
+#include "ClientHandler.h"
+#include "SubReactor.h"
 #include "socketUtils.h"
 
 class TcpServer {
 public:
-    // Callback type for new client connections
-    using ClientHandler = std::function<std::shared_ptr<BaseConnection>(SocketPtr client_id, const sockaddr_in& client_addr)>;
 
     explicit TcpServer(int port = 9999, int backlog = SOMAXCONN,bool use_epoll = true);
+    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN,bool use_epoll = true,int num_reactors = 7);
     ~TcpServer();
 
     TcpServer(const TcpServer&) = delete;
@@ -38,4 +39,18 @@ private:
 
     static void init_wakeup_pipe();
     static void signal_handler(int sig);
+
+    std::vector<std::unique_ptr<SubReactor>> sub_reactors_;
+    std::atomic<size_t> next_reactor_index_{0};
+    std::mutex connections_mutex_;
+    std::vector<int> epoll_fds_;
+    std::vector<std::unordered_map<int, std::shared_ptr<EpollConnection>>> connections_per_reactor_;
+    std::vector<std::thread> reactor_threads_;
+    int num_reactors_ = 1; //Default single reactor
+
+    void check_idle_timeout(std::unordered_map<int,std::shared_ptr<EpollConnection>>& conns,int epfd);
+    void cleanup_connections(std::unordered_map<int,std::shared_ptr<EpollConnection>>& conns,int epfd);
+
+    void start_multi_reactor(const ClientHandler& handler);
+    void distribute_connections(SocketPtr client_fd,const sockaddr_in& client_addr);
 };

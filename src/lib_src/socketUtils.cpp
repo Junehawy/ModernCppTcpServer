@@ -67,3 +67,41 @@ void close_fd(int fd) {
         }
     }
 }
+
+namespace socket_utils {
+    void add_epoll(int epfd,int fd,uint32_t events) {
+        epoll_event ev{};
+        ev.events = events;
+        ev.data.fd = fd;
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev) == -1) {
+            spdlog::error("epoll_ctl add fd {} failed: {}", fd,strerror(errno));
+            throw SocketException("epoll_ctl add failed");
+        }
+    }
+
+    void mod_epoll(int epfd,int fd,uint32_t events) {
+        epoll_event ev{};
+        ev.events = events;
+        ev.data.fd = fd;
+        if (epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev) == -1) {
+            spdlog::error("epoll_ctl mod fd {} failed: {}", fd,strerror(errno));
+            throw SocketException("epoll_ctl mod failed");
+        }
+    }
+
+    void del_epoll(int epfd,int fd) {
+        if (epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr) == -1) {
+            spdlog::error("epoll_ctl del fd {} failed: {}", fd, strerror(errno));
+        }
+    }
+
+    void check_syscall(int ret, const std::string &msg, bool throw_on_fail) {
+        if (ret < 0) {
+            std::string err = msg + ": " + strerror(errno);
+            spdlog::error("{}",err);
+            if (throw_on_fail) {
+                throw SocketException(err);
+            }
+        }
+    }
+} // namespace socket_utils
