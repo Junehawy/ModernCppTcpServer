@@ -7,14 +7,15 @@
 
 #include "spdlog/spdlog.h"
 
-TcpClient::TcpClient(const std::string &server_ip, int port) :server_ip_(server_ip),port_(port) {
+TcpClient::TcpClient(const std::string &server_ip, const int port) : server_ip_(server_ip), port_(port) {
     ensure_connection();
 }
 
+// Non-blocking connect with 5s timeout using poll()
 void TcpClient::ensure_connection() {
     sock_fd_ = net_utils::make_socket_raii(AF_INET, SOCK_STREAM, 0);
 
-    int flag = fcntl(sock_fd_->get(), F_GETFL, 0);
+    const int flag = fcntl(sock_fd_->get(), F_GETFL, 0);
     fcntl(sock_fd_->get(), F_SETFL, flag | O_NONBLOCK);
 
     sockaddr_in server_addr{};
@@ -41,7 +42,7 @@ void TcpClient::ensure_connection() {
 
         int so_error;
         socklen_t len = sizeof(so_error);
-        getsockopt(sock_fd_->get(),SOL_SOCKET,SO_ERROR,&so_error,&len);
+        getsockopt(sock_fd_->get(), SOL_SOCKET, SO_ERROR, &so_error, &len);
         if (so_error != 0) {
             throw net_utils::SyscallException("socket error");
         }
@@ -50,8 +51,7 @@ void TcpClient::ensure_connection() {
     fcntl(sock_fd_->get(), F_SETFL, flag);
     connected_ = true;
     last_active_time_ = std::chrono::steady_clock::now();
-    NET_LOG_INFO("Connected to {}:{}",server_ip_,port_);
-
+    NET_LOG_INFO("Connected to {}:{}", server_ip_, port_);
 }
 
 // Send a message (appends \n as line terminator)
@@ -59,11 +59,11 @@ void TcpClient::send_message(const std::string &msg) {
     if (!connected_) {
         throw std::runtime_error("send message not connected");
     }
-    std::string data = msg + "\n";
-    ssize_t sent = net_utils::writen(sock_fd_->get(), data.data(), data.size());
+    const std::string data = msg + "\n";
 
     // Use writen() to ensure all bytes are sent
-    if (sent < 0 || static_cast<size_t>(sent) != data.size()) {
+    if (const ssize_t sent = net_utils::writen(sock_fd_->get(), data.data(), data.size());
+        sent < 0 || static_cast<size_t>(sent) != data.size()) {
         connected_ = false;
         throw net_utils::SyscallException("Send failed");
     }
@@ -77,10 +77,9 @@ std::string TcpClient::receive_line() {
     }
 
     while (true) {
-        const char* eol = recv_buf_.find_eol();
-        if (eol) {
-            std::string line(recv_buf_.peek(),eol-recv_buf_.peek());
-            recv_buf_.retrieve_until(eol+1);
+        if (const char *eol = recv_buf_.find_eol()) {
+            std::string line(recv_buf_.peek(), eol - recv_buf_.peek());
+            recv_buf_.retrieve_until(eol + 1);
 
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();
@@ -90,7 +89,7 @@ std::string TcpClient::receive_line() {
         }
 
         char temp[4096];
-        ssize_t n = recv(sock_fd_->get(), temp, sizeof(temp), 0);
+        const ssize_t n = recv(sock_fd_->get(), temp, sizeof(temp), 0);
         if (n < 0) {
             if (errno == EINTR)
                 continue;
@@ -110,21 +109,24 @@ std::string TcpClient::receive_line() {
     }
 }
 
-std::string TcpClient::receive(size_t max_len) {
+
+// Direct read bypassing line buffering
+std::string TcpClient::receive(const size_t max_len) {
     if (!connected_) {
         throw std::runtime_error("Not connected");
     }
 
     if (recv_buf_.readable_bytes() > 0) {
-        size_t to_read = std::min(max_len, recv_buf_.readable_bytes());
+        const size_t to_read = std::min(max_len, recv_buf_.readable_bytes());
         return recv_buf_.retrieve_as_string(to_read);
     }
 
     std::string result;
     result.resize(max_len);
-    ssize_t n = recv(sock_fd_->get(), result.data(), max_len, 0);
+    const ssize_t n = recv(sock_fd_->get(), result.data(), max_len, 0);
     if (n < 0) {
-        if (errno == EINTR) return receive(max_len);
+        if (errno == EINTR)
+            return receive(max_len);
         connected_ = false;
         throw net_utils::SyscallException("recv failed");
     }

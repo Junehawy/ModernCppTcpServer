@@ -5,6 +5,7 @@
 #include <spdlog/spdlog.h>
 
 int main() {
+    // Setup logging
     spdlog::set_level(spdlog::level::debug);
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
     spdlog::info("Client started");
@@ -24,11 +25,11 @@ int main() {
             if (input.empty()) continue;
             client.send_message(input);
 
+            // Retry logic for slow responses
             bool received = false;
             for (int attempt=0;attempt<20;attempt++) {
                 try {
-                    std::string resp = client.receive_line();
-                    if (!resp.empty()) {
+                    if (std::string resp = client.receive_line(); !resp.empty()) {
                         spdlog::info("Server says: {}", trim(rtrim_cc(resp)));
                         received = true;
                         break;

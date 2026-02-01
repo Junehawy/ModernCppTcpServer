@@ -1,13 +1,12 @@
 #include "http_types.h"
 #include <algorithm>
-#include <cstring>
 #include <sstream>
 
 #include "config.h"
 #include "net_utils.h"
 #include "stringUtils.h"
 
-HttpParser::HttpParser() : state_(State::ExpectRequestLine), body_received_(0){}
+HttpParser::HttpParser() : state_(State::ExpectRequestLine), body_received_(0) {}
 
 void HttpParser::reset() {
     state_ = State::ExpectRequestLine;
@@ -16,14 +15,15 @@ void HttpParser::reset() {
     body_received_ = 0;
 }
 
-size_t HttpParser::parse(const char *data, size_t len) {
+// Finite state machine: RequestLine -> Headers -> Body -> Complete
+size_t HttpParser::parse(const char *data, const size_t len) {
     size_t consumed = 0;
 
     while (consumed < len && state_ != State::Complete && state_ != State::Error) {
         if (state_ == State::ExpectRequestLine || state_ == State::ExpectHeader) {
-            const char *crlf = static_cast<const char *>(memmem(data + consumed, len - consumed, "\r\n", 2));
+            const auto crlf = static_cast<const char *>(memmem(data + consumed, len - consumed, "\r\n", 2));
             if (!crlf) {
-                temp_buffer_.append(data + consumed, len - consumed);
+                temp_buffer_.append(data + consumed, len - consumed);   // Partial line
                 if (temp_buffer_.size() > MAX_HTTP_HEADER_SIZE) {
                     state_ = State::Error;
                     current_req_.parser_error = "Header too large";
@@ -31,9 +31,9 @@ size_t HttpParser::parse(const char *data, size_t len) {
                 return len;
             }
 
-            size_t line_len = crlf - (data + consumed);
+            const size_t line_len = crlf - (data + consumed);
             std::string line = temp_buffer_;
-            line.append(data + consumed, line_len);
+            line.append(data + consumed, line_len);     // Prepend any partial from last call
             temp_buffer_.clear();
             consumed += line_len + 2;
 
@@ -45,7 +45,7 @@ size_t HttpParser::parse(const char *data, size_t len) {
                 state_ = State::ExpectHeader;
             } else {
                 if (line.empty()) {
-                    check_headers();
+                    check_headers();    // Empty line signals end of headers
                     if (current_req_.content_length > 0) {
                         state_ = State::ExpectBody;
                     } else {
@@ -62,7 +62,7 @@ size_t HttpParser::parse(const char *data, size_t len) {
         } else if (state_ == State::ExpectBody) {
             size_t need = current_req_.content_length - body_received_;
             size_t available = len - consumed;
-            size_t take = std::min(need, available);
+            const size_t take = std::min(need, available);
 
             current_req_.body.append(data + consumed, take);
             body_received_ += take;
@@ -76,7 +76,7 @@ size_t HttpParser::parse(const char *data, size_t len) {
     return consumed;
 }
 
-bool HttpParser::parse_request_line(const std::string& line) {
+bool HttpParser::parse_request_line(const std::string &line) {
     std::string cleaned_line = line;
     if (!cleaned_line.empty() && cleaned_line.back() == '\r') {
         cleaned_line.pop_back();
@@ -88,7 +88,7 @@ bool HttpParser::parse_request_line(const std::string& line) {
         return false;
     }
 
-    if (current_req_.version.size() >= 5 && current_req_.version.substr(0,5) != "HTTP/") {
+    if (current_req_.version.size() >= 5 && current_req_.version.substr(0, 5) != "HTTP/") {
         current_req_.parser_error = "Invalid HTTP version";
         return false;
     }
@@ -96,14 +96,14 @@ bool HttpParser::parse_request_line(const std::string& line) {
 }
 
 bool HttpParser::parse_header_line(const std::string &line) {
-    size_t colon = line.find(':');
+    const size_t colon = line.find(':');
     if (colon == std::string::npos) {
         current_req_.parser_error = "Invalid HTTP header line: " + line;
         return false;
     }
 
-    std::string key = trim(line.substr(0, colon));
-    std::string value = trim(line.substr(colon + 1));
+    const std::string key = trim(line.substr(0, colon));
+    const std::string value = trim(line.substr(colon + 1));
 
     if (key.empty()) {
         current_req_.parser_error = "Empty header key";
@@ -112,37 +112,38 @@ bool HttpParser::parse_header_line(const std::string &line) {
 
     current_req_.headers[key] = value;
 
-    std::string key_lower = to_lower(key);
-    if (key_lower == "content-length") {
+    if (const std::string key_lower = to_lower(key); key_lower == "content-length") {
         try {
             current_req_.content_length = std::stoul(value);
             if (current_req_.content_length > MAX_HTTP_BODY_SIZE) {
                 current_req_.parser_error = "Content too large";
                 return false;
             }
-        }catch (...) {
+        } catch (...) {
             current_req_.parser_error = "Invalid content-length";
             return false;
         }
-    }else if (key_lower == "connection") {
+    } else if (key_lower == "connection") {
         current_req_.keep_alive = (to_lower(value) != "close");
-    }else if (key_lower == "host") {
+    } else if (key_lower == "host") {
         current_req_.host = value;
-    }else if (key_lower == "user-agent") {
+    } else if (key_lower == "user-agent") {
         current_req_.user_agent = value;
-    }else if (key_lower == "content-type") {
+    } else if (key_lower == "content-type") {
         current_req_.content_type = value;
     }
     return true;
 }
 
+// HTTP/1.0 defaults to close unless "Connection: keep-alive"
 void HttpParser::check_headers() {
     if (current_req_.version == "HTTP/1.0") {
-        auto it = current_req_.headers.find("Connection");
+        const auto it = current_req_.headers.find("Connection");
         current_req_.keep_alive = (it != current_req_.headers.end() && to_lower(it->second) == "keep-alive");
     }
 }
 
+// Move semantics: prevents copying large bodies
 SimpleHttpRequest HttpParser::get_request() {
     SimpleHttpRequest result = std::move(current_req_);
     result.parse_sucess = (state_ == State::Complete);

@@ -1,18 +1,20 @@
 #include "../../include/EpollConnection.h"
 
-EpollConnection::EpollConnection(net_utils::SocketPtr sock, sockaddr_in addr, MessageHandler handler) :
+#include "SubReactor.h"
+
+EpollConnection::EpollConnection(net_utils::SocketPtr sock, const sockaddr_in addr, MessageHandler handler) :
     BaseConnection(std::move(sock), addr, std::move(handler)) {}
 
+// Fill input buffer and process complete messages
 void EpollConnection::handle_read() {
     if (!is_alive())
         return;
 
     char temp[READ_CHUNK_SIZE];
-    bool has_new_data = false;
 
     while (true) {
         // Read data from socket
-        ssize_t n = ::read(get_fd(), temp, sizeof(temp));
+        const ssize_t n = ::read(get_fd(), temp, sizeof(temp));
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
                 break;
@@ -23,46 +25,32 @@ void EpollConnection::handle_read() {
             return;
         }
         if (n == 0) {
-            if (input_buffer_.readable_bytes() == 0) {
-                NET_LOG_DEBUG("Peer {} closed connection", get_peer_info());
-                shutdown();
-                return;
-            }
-            break;
-        }
-
-        has_new_data = true;
-        try {
-            input_buffer_.append(temp, n);
-            if (has_http_handler()) {
-                current_raw_buffer_.append(temp, n);
-            }
-        } catch (const std::exception &e) {
-            NET_LOG_ERROR("Buffer overflow for {}: {}", get_peer_info(), e.what());
             shutdown();
             return;
         }
-    }
 
-    if (!has_new_data && input_buffer_.readable_bytes() == 0)
-        return;
+        input_buffer_.append(temp, n);
+        if (has_http_handler()) {
+            current_raw_buffer_.append(temp, n);
+        }
+    }
 
     update_active_time();
 
+    // Auto-detect protocol based on first bytes
     if (!protocol_determined_ && input_buffer_.readable_bytes() > 0) {
-        const char* data = input_buffer_.peek();
-        size_t len = input_buffer_.readable_bytes();
+        const char *data = input_buffer_.peek();
+        const size_t len = input_buffer_.readable_bytes();
 
-        size_t check_len = std::min(len,size_t(128));
+        const size_t check_len = std::min(len, static_cast<size_t>(128));
 
         std::string_view peek_view(data, check_len);
 
-        static const std::vector<std::string_view> http_starts = {
-            "GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "
-        };
+        static const std::vector<std::string_view> http_starts = {"GET ",     "POST ",  "HEAD ",    "PUT ",  "DELETE ",
+                                                                  "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "};
 
         bool looks_like_http = false;
-        for (const auto& prefix : http_starts) {
+        for (const auto &prefix: http_starts) {
             if (peek_view.starts_with(prefix)) {
                 looks_like_http = true;
                 break;
@@ -71,8 +59,7 @@ void EpollConnection::handle_read() {
 
         if (!looks_like_http) {
             std::string_view full_view(data, len);
-            size_t pos = full_view.find(" HTTP/");
-            if (pos != std::string_view::npos && pos < 100) {
+            if (const size_t pos = full_view.find(" HTTP/"); pos != std::string_view::npos && pos < 100) {
                 looks_like_http = true;
             }
         }
@@ -90,6 +77,7 @@ void EpollConnection::handle_read() {
         protocol_determined_ = true;
     }
 
+    // HTTP mode: incremental parse with pipelining support
     if (use_http_mode_ || has_http_handler()) {
         if (!http_parser_.has_value()) {
             http_parser_.emplace();
@@ -98,7 +86,7 @@ void EpollConnection::handle_read() {
         bool should_close = false;
 
         while (input_buffer_.readable_bytes() > 0 && is_alive()) {
-            size_t consumed = http_parser_->parse(input_buffer_.peek(), input_buffer_.readable_bytes());
+            const size_t consumed = http_parser_->parse(input_buffer_.peek(), input_buffer_.readable_bytes());
             input_buffer_.retrieve(consumed);
 
             if (http_parser_->has_error()) {
@@ -115,9 +103,9 @@ void EpollConnection::handle_read() {
             if (http_parser_->is_complete()) {
                 auto req = http_parser_->get_request();
 
-                size_t header_end = current_raw_buffer_.find("\r\n\r\n");
-                size_t total_len = (header_end != std::string::npos) ? header_end + 4 + req.body.size()
-                                                                     : current_raw_buffer_.size();
+                const size_t header_end = current_raw_buffer_.find("\r\n\r\n");
+                const size_t total_len = (header_end != std::string::npos) ? header_end + 4 + req.body.size()
+                                                                           : current_raw_buffer_.size();
 
                 std::string raw_req = current_raw_buffer_.substr(0, total_len);
                 current_raw_buffer_.erase(0, total_len);
@@ -139,6 +127,7 @@ void EpollConnection::handle_read() {
             }
         }
 
+        // Process ready requests in order
         while (!pending_requests_.empty() && is_alive()) {
             auto [req, raw] = std::move(pending_requests_.front());
             pending_requests_.pop_front();
@@ -157,6 +146,7 @@ void EpollConnection::handle_read() {
     }
 }
 
+// Split buffer by newlines and invoke handler per line
 void EpollConnection::handle_line_protocol() {
     while (true) {
         const char *eol = input_buffer_.find_eol();
@@ -176,16 +166,22 @@ void EpollConnection::handle_line_protocol() {
     }
 }
 
+// Flush output buffer to socket (called when EPOLLOUT ready)
 void EpollConnection::handle_write() {
     if (!is_alive() || !socket_ || !socket_->valid())
         return;
 
     std::lock_guard lock(buffer_mutex_);
 
-    if (output_buffer_.readable_bytes() == 0)
+    if (output_buffer_.readable_bytes() == 0) {
+        if (reactor_) {
+            reactor_->disable_writing(get_fd());
+        }
         return;
+    }
 
-    ssize_t n = ::write(get_fd(), output_buffer_.peek(), output_buffer_.readable_bytes());
+
+    const ssize_t n = ::write(get_fd(), output_buffer_.peek(), output_buffer_.readable_bytes());
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return;
@@ -199,15 +195,22 @@ void EpollConnection::handle_write() {
 
     output_buffer_.retrieve(n);
 
+    if (output_buffer_.readable_bytes() == 0 && reactor_) {
+        reactor_->disable_writing(get_fd());
+    }
+
     if (n > 0 && output_buffer_.readable_bytes() < LOW_WATER_MARK) {
         output_buffer_.shrink_if_needed();
     }
 }
 
 void EpollConnection::handle_error() {
-    int error = 0;
-    socklen_t len = sizeof(error);
-    getsockopt(get_fd(), SOL_SOCKET, SO_ERROR, &error, &len);
     NET_LOG_ERROR("{} connection error, closing", get_peer_info());
     shutdown();
+}
+
+void EpollConnection::buffer_output() {
+    if (reactor_) {
+        reactor_->enable_writing(get_fd());
+    }
 }

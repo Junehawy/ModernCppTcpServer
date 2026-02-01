@@ -3,11 +3,11 @@
 #include <fcntl.h>
 #include <format>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <source_location>
 #include <stdexcept>
 #include <sys/epoll.h>
 #include <sys/socket.h>
-#include <netinet/tcp.h>
 
 #include "spdlog/spdlog.h"
 
@@ -15,8 +15,8 @@ namespace net_utils {
     // Unified exception class
     class SyscallException : public std::runtime_error {
     public:
-        SyscallException(const std::string &msg, int err = errno,
-                         std::source_location loc = std::source_location::current()) :
+        explicit SyscallException(const std::string &msg, const int err = errno,
+                                  const std::source_location loc = std::source_location::current()) :
             std::runtime_error(msg), err_(err), loc_(loc) {}
 
         int error_code() const { return err_; }
@@ -57,25 +57,25 @@ namespace net_utils {
     }
 
     // Socket encapsulation
-    inline bool set_nonblocking(int fd) {
+    inline bool set_nonblocking(const int fd) {
         int flags = fcntl(fd, F_GETFL, 0);
         check_syscall(flags, "fnctl F_GETFL");
         check_syscall(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fnctl F_SETFL");
         return true;
     }
 
-    inline bool set_reuse_addr(int fd) {
+    inline bool set_reuse_addr(const int fd) {
         int opt = 1;
         check_syscall(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt SO_REUSEADDR");
         return true;
     }
 
-    inline bool set_tcp_nodelay(int fd) {
-        int opt = 1;
-        check_syscall(setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,&opt,sizeof(opt)), "setsocketopt TCP_NODELAY");
+    inline bool set_tcp_nodelay(const int fd) {
+        constexpr int opt = 1;
+        check_syscall(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)), "setsocketopt TCP_NODELAY");
         return true;
     }
-    inline void close_safe(int fd) {
+    inline void close_safe(const int fd) {
         if (fd >= 0) {
             ::close(fd);
         }
@@ -83,10 +83,10 @@ namespace net_utils {
 
     inline ssize_t writen(int fd, const void *buf, size_t count) {
         size_t nleft = count;
-        const char *ptr = static_cast<const char *>(buf);
+        auto ptr = static_cast<const char *>(buf);
 
         while (nleft > 0) {
-            ssize_t nwritten = write(fd, ptr, nleft);
+            const ssize_t nwritten = write(fd, ptr, nleft);
             if (nwritten < 0) {
                 if (errno == EINTR)
                     continue;
@@ -108,30 +108,30 @@ namespace net_utils {
         return epfd;
     }
 
-    inline void epoll_add(int epfd, int fd, uint32_t events = EPOLLIN | EPOLLET,
-                          std::source_location loc = std::source_location::current()) {
+    inline void epoll_add(const int epfd, const int fd, const uint32_t events = EPOLLIN | EPOLLET,
+                          const std::source_location loc = std::source_location::current()) {
         epoll_event ev{};
         ev.events = events;
         ev.data.fd = fd;
         check_syscall(epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev), "epoll_ctl ADD", loc);
     }
 
-    inline void epoll_mod(int epfd, int fd, uint32_t events,
-                          std::source_location loc = std::source_location::current()) {
+    inline void epoll_mod(const int epfd, const int fd, const uint32_t events,
+                          const std::source_location loc = std::source_location::current()) {
         epoll_event ev{};
         ev.events = events;
         ev.data.fd = fd;
         check_syscall(epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev), "epoll_ctl MOD", loc);
     }
 
-    inline void epoll_del(int epfd, int fd, std::source_location loc = std::source_location::current()) {
+    inline void epoll_del(const int epfd, const int fd) {
         epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
     }
 
     // Socket RAII
     struct SocketFd {
         int fd = -1;
-        explicit SocketFd(int f) : fd(f) {}
+        explicit SocketFd(const int f) : fd(f) {}
         ~SocketFd() { close_safe(fd); }
 
         [[nodiscard]] int get() const noexcept { return fd; }
@@ -140,9 +140,9 @@ namespace net_utils {
         SocketFd(const SocketFd &) = delete;
         SocketFd &operator=(const SocketFd &) = delete;
 
-        SocketFd(SocketFd&& other) noexcept : fd(other.fd) {other.fd = -1;}
+        SocketFd(SocketFd &&other) noexcept : fd(other.fd) { other.fd = -1; }
 
-        SocketFd& operator=(SocketFd&& other) noexcept {
+        SocketFd &operator=(SocketFd &&other) noexcept {
             if (this != &other) {
                 close_safe(fd);
                 fd = other.fd;
@@ -153,7 +153,7 @@ namespace net_utils {
     };
 
     struct SocketDeleter {
-        void operator()(SocketFd *s) const noexcept {
+        void operator()(const SocketFd *s) const noexcept {
             if (s && s->valid()) {
                 ::shutdown(s->get(), SHUT_RDWR);
                 close_safe(s->get());
@@ -164,8 +164,8 @@ namespace net_utils {
 
     using SocketPtr = std::unique_ptr<SocketFd, SocketDeleter>;
 
-    inline SocketPtr make_socket_raii(int domain, int type, int protocol) {
-        int fd = socket(domain, type, protocol);
+    inline SocketPtr make_socket_raii(const int domain, const int type, const int protocol) {
+        const int fd = socket(domain, type, protocol);
         check_syscall(fd, "socket");
         return SocketPtr(new SocketFd(fd), SocketDeleter{});
     }
