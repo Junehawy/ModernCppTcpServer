@@ -2,72 +2,46 @@
 #include <arpa/inet.h>
 #include <csignal>
 #include <fcntl.h>
-#include <iostream>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include <unordered_map>
 
-int TcpServer::s_wakeup_pipe_[2] = {-1, -1};
-std::once_flag TcpServer::s_pipe_init_flag;
-
-// RAII wrapper for epoll fd
-class EpollFd {
-public:
-    explicit EpollFd(int flags = 0) : fd_(epoll_create1(flags)) {
-        if (fd_ < 0) {
-            throw SocketException("epoll_create1 failed", errno);
-        }
-    }
-    ~EpollFd() {
-        if (fd_ >= 0) {
-            ::close(fd_);
-        }
-    }
-    EpollFd(const EpollFd &) = delete;
-    EpollFd &operator=(const EpollFd &) = delete;
-
-    EpollFd(EpollFd &&other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
-    EpollFd &operator=(EpollFd &&other) noexcept {
-        if (this != &other) {
-            if (fd_ >= 0)
-                ::close(fd_);
-            fd_ = other.fd_;
-            other.fd_ = -1;
-        }
-        return *this;
-    }
-
-    [[nodiscard]] int get() const noexcept { return fd_; };
-    operator int() const noexcept { return fd_; }
-
-private:
-    int fd_ = -1;
-};
-
-void TcpServer::init_wakeup_pipe() {
-    if (pipe(s_wakeup_pipe_) == -1) {
-        throw SocketException("pipe failed for wakeup", errno);
-    }
-    fcntl(s_wakeup_pipe_[0], F_SETFL, O_NONBLOCK);
-    fcntl(s_wakeup_pipe_[1], F_SETFL, O_NONBLOCK);
-}
+std::atomic<TcpServer*> TcpServer::instance_{nullptr};
+std::mutex TcpServer::instance_mutex_;
 
 void TcpServer::signal_handler(int sig) {
-    char c = 'S';
-    ::write(s_wakeup_pipe_[1], &c, 1);
+    auto* inst = instance();
+    if (inst) {
+        inst->should_stop_ = true;
+        inst->running_ = false;
+        inst->wakeup();
+    }
 }
 
 TcpServer::TcpServer(int port, int backlog, bool use_epoll, int num_reactors) :
-    server_fd_(nullptr), port_(port), backlog_(backlog), use_epoll_(use_epoll), num_reactors_(num_reactors) {
+    port_(port), backlog_(backlog), use_epoll_(use_epoll), num_reactors_(num_reactors) {
+
+    {
+        std::lock_guard lock(instance_mutex_);
+        if (instance_.load(std::memory_order_relaxed) != nullptr) {
+            NET_LOG_WARN("Multiple instances of TcpServer detected,signal handling may be unreliable");
+        }else {
+            instance_.store(this,std::memory_order_release);
+        }
+    }
+
+    if (pipe(wakeup_pipe_) < 0) {
+        throw std::runtime_error("Failed to create wakeup pipe");
+    }
+    net_utils::set_nonblocking(wakeup_pipe_[0]);
+    net_utils::set_nonblocking(wakeup_pipe_[1]);
+
     // Create listening socket
-    server_fd_ = make_socket_raii(AF_INET, SOCK_STREAM, 0);
+    server_fd_ = net_utils::make_socket_raii(AF_INET, SOCK_STREAM, 0);
 
     // Allow port reuse immediately after release
-    if (!set_reuse_addr(server_fd_->get())) {
-        throw SocketException("set_reuse_addr failed");
-    }
+    net_utils::set_reuse_addr(server_fd_->get());
 
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
@@ -75,35 +49,43 @@ TcpServer::TcpServer(int port, int backlog, bool use_epoll, int num_reactors) :
     server_addr.sin_port = htons(port_);
 
     // Bind to any address:port
-    if (bind(server_fd_->get(), reinterpret_cast<sockaddr *>(&server_addr), sizeof(server_addr)) == -1) {
-        throw SocketException("bind failed");
-    }
+    net_utils::check_syscall(bind(server_fd_->get(), reinterpret_cast<sockaddr *>(&server_addr), sizeof(server_addr)), "bind");
 
     // Start listening for incoming connections
-    if (listen(server_fd_->get(), backlog_) == -1) {
-        throw SocketException("listen failed");
-    }
+    net_utils::check_syscall(listen(server_fd_->get(), backlog_), "listen");
 
-    spdlog::info("Server listening on port {}", port_);
-
-    std::call_once(s_pipe_init_flag, &TcpServer::init_wakeup_pipe);
     std::signal(SIGINT, &TcpServer::signal_handler);
     std::signal(SIGTERM, &TcpServer::signal_handler);
+
+    NET_LOG_INFO("Server initialized on port {}",port_);
 }
 
-TcpServer::TcpServer(int port, int backlog, bool use_epoll) : TcpServer(port, backlog, use_epoll, 1) {}
+TcpServer::TcpServer(int port, int backlog, bool use_epoll) : TcpServer(port, backlog, use_epoll, 1) {
+    instance_ = this;
+}
 
 TcpServer::~TcpServer() {
     shutdown();
-    spdlog::info("TcpServer destroyed.");
+    {
+        std::lock_guard lock(instance_mutex_);
+        if (instance_.load(std::memory_order_relaxed) == this) {
+            instance_.store(nullptr, std::memory_order_release);
+        }
+    }
 }
 
 // Start server: choose epoll/blocking mode
 void TcpServer::start(const ClientHandler &handler) {
-    if (use_epoll_) {
-        start_epoll(handler);
-    } else {
+    running_ = true;
+
+    if (!use_epoll_) {
         start_blocking(handler);
+        return;
+    }
+    if (num_reactors_ <= 1) {
+        start_single_epoll(handler);
+    } else {
+        start_multi_epoll(handler);
     }
 }
 
@@ -112,219 +94,192 @@ void TcpServer::start_blocking(const ClientHandler &handler) {
     // Accept loop runs in dedicated thread
     accept_thread_ = std::jthread([this, handler] {
         fd_set readfds;
-        int max_fd = std::max(server_fd_->get(), s_wakeup_pipe_[0]);
+        int max_fd = std::max(server_fd_->get(), wakeup_pipe_[0]);
 
         while (running_ && !should_stop_) {
             FD_ZERO(&readfds);
             FD_SET(server_fd_->get(), &readfds);
-            FD_SET(s_wakeup_pipe_[0], &readfds);
+            FD_SET(wakeup_pipe_[0], &readfds);
 
             struct timeval tv{0, 200000}; // 200ms
             int ret = select(max_fd + 1, &readfds, nullptr, nullptr, &tv);
             if (ret < 0) {
                 if (errno == EINTR)
                     continue;
-                spdlog::error("select failed in blocking mode: {}", strerror(errno));
+                NET_LOG_ERROR("select failed in blocking mode: {}", strerror(errno));
                 break;
             }
 
-            if (FD_ISSET(s_wakeup_pipe_[0], &readfds)) {
+            if (FD_ISSET(wakeup_pipe_[0], &readfds)) {
                 char buf[16];
-                while (::read(s_wakeup_pipe_[0], buf, sizeof(buf)) > 0) {
+                while (::read(wakeup_pipe_[0], buf, sizeof(buf)) > 0) {
                 }
-                spdlog::info("Shutdown signal received in blocking mode");
+                NET_LOG_INFO("Shutdown signal received in blocking mode");
                 should_stop_ = true;
                 break;
             }
 
             if (FD_ISSET(server_fd_->get(), &readfds)) {
-                sockaddr_in client_addr{};
-                socklen_t client_len = sizeof(client_addr);
-
-                int client_raw_fd = accept(server_fd_->get(), reinterpret_cast<sockaddr *>(&client_addr), &client_len);
-
-                if (client_raw_fd == -1) {
-                    if (errno == EINTR || should_stop_)
-                        break;
-                    spdlog::error("Accept failed: {}", strerror(errno));
-                    continue;
-                }
-
-                // Wrap raw fd with RAII socket pointer
-                SocketPtr client_fd{new SocketFd(client_raw_fd), SocketDeleter{}};
-
-                char client_ip[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
-
-                spdlog::info("Client connected: {}:{}", client_ip, ntohs(client_addr.sin_port));
-
-                // Hand over to user-provided handler (usually creates Connection)
-                handler(std::move(client_fd), client_addr);
+                handle_accept(server_fd_->get(),handler);
             }
         }
     });
 
-    spdlog::info("Shutdown signal received, stopping accept loop...");
+    NET_LOG_INFO("Shutdown signal received, stopping accept loop...");
 
     running_ = false;
     should_stop_ = true;
 
-    if (server_fd_) {
-        ::shutdown(server_fd_->get(), SHUT_RDWR);
-    }
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
 }
 
 // Add epoll mode
-void TcpServer::start_epoll(const ClientHandler &handler) {
-    if (num_reactors_ > 1) {
-        start_multi_reactor(handler);
-    } else {
-        EpollFd epoll_fd(0);
-        int epfd = epoll_fd.get();
+void TcpServer::start_single_epoll(const ClientHandler &handler) {
+    auto reactor = std::make_unique<SubReactor>(handler);
+    sub_reactors_.emplace_back(std::move(reactor));
 
-        // nonblock listen_fd
-        fcntl(server_fd_->get(), F_SETFL, fcntl(server_fd_->get(), F_GETFL, 0) | O_NONBLOCK);
+    NET_LOG_INFO("Starting single reactor mode");
 
-        epoll_event ev{};
-        ev.events = EPOLLIN | EPOLLET;
-        ev.data.fd = server_fd_->get();
-        if (epoll_ctl(epfd, EPOLL_CTL_ADD, server_fd_->get(), &ev) == -1) {
-            throw SocketException("epoll_ctl add server_fd failed");
-        }
+    accept_thread_ = std::jthread([this,handler] {
+        net_utils::EpollFd accept_fd;
+        net_utils::epoll_add(accept_fd.get(), server_fd_->get(), EPOLLIN);
+        net_utils::epoll_add(accept_fd.get(), wakeup_pipe_[0], EPOLLIN);
 
-        ev.events = EPOLLIN | EPOLLET;
-        ev.data.fd = s_wakeup_pipe_[0];
-        if (epoll_ctl(epfd, EPOLL_CTL_ADD, s_wakeup_pipe_[0], &ev) == -1) {
-            throw SocketException("epoll_ctl add wakeup_pipe failed");
-        }
+        epoll_event events[2] = {};
 
-        spdlog::info("epoll mode enabled for server");
-
-        auto last_check = std::chrono::steady_clock::now();
-
-        while (running_ && !should_stop_.load()) {
-            epoll_event events[EPOLL_MAX_EVENTS];
-            int nfds = epoll_wait(epfd, events, EPOLL_MAX_EVENTS, EPOLL_WAIT_TIMEOUT.count());
+        while (running_ && !should_stop_) {
+            int nfds = epoll_wait(accept_fd.get(), events, 2, -1);
             if (nfds < 0) {
                 if (errno == EINTR)
                     continue;
-                spdlog::error("epoll_wait failed: {}", strerror(errno));
+                NET_LOG_ERROR("epoll_wait failed in single reactor: {}", strerror(errno));
                 break;
             }
 
             for (int i = 0; i < nfds; i++) {
                 int fd = events[i].data.fd;
 
-                // Handle shutdown signal
-                if (fd == s_wakeup_pipe_[0]) {
+                if (fd == wakeup_pipe_[0]) {
                     char buf[16];
-                    while (::read(s_wakeup_pipe_[0], buf, sizeof(buf)) > 0)
-                        ;
-                    should_stop_ = true;
-                    spdlog::info("Shutdown signal received, stopping accept loop...");
-                    continue;
-                }
-                if (events[i].events & (EPOLLHUP | EPOLLERR)) {
-                    spdlog::error("epoll error on fd {}", fd);
-                    if (connections_.contains(fd)) {
-                        connections_[fd]->handle_error();
-                        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-                        connections_.erase(fd);
+                    while (::read(wakeup_pipe_[0], buf, sizeof(buf)) > 0) {
                     }
-                    continue;
+                    NET_LOG_INFO("Shutdown signal received in single reactor");
+                    should_stop_ = true;
+                    break;
                 }
 
-                // Accept all pending connections
                 if (fd == server_fd_->get()) {
-                    while (true) {
+                    while (running_) {
+                        handle_accept(fd,handler);
+                    }
+                }
+            }
+        }
+    });
+
+    NET_LOG_INFO("Single reactor accept loop running");
+}
+
+void TcpServer::start_multi_epoll(const ClientHandler &handler) {
+    for (int i = 0; i < num_reactors_; ++i) {
+        sub_reactors_.emplace_back(std::make_unique<SubReactor>(handler));
+    }
+
+    NET_LOG_INFO("start_multi_reactor with {} reactors", num_reactors_);
+
+    accept_thread_ = std::jthread([this] {
+        net_utils::EpollFd accept_fd;
+        net_utils::epoll_add(accept_fd.get(), server_fd_->get(), EPOLLIN);
+        net_utils::epoll_add(accept_fd.get(), wakeup_pipe_[0], EPOLLIN);
+
+        epoll_event events[2] = {};
+
+        while (running_ && !should_stop_) {
+            int nfds = epoll_wait(accept_fd.get(), events, 2, -1);
+            if (nfds < 0) {
+                if (errno == EINTR)
+                    continue;
+                NET_LOG_ERROR("Epoll wait failed in multi-reactor: {}", strerror(errno));
+                break;
+            }
+
+            for (int i = 0; i < nfds; i++) {
+                int fd = events[i].data.fd;
+
+                if (fd == wakeup_pipe_[0]) {
+                    char buf[16];
+                    while (::read(wakeup_pipe_[0], buf, sizeof(buf)) > 0) {
+                    }
+                    NET_LOG_INFO("Shutdown signal received in multi-reactor");
+                    should_stop_ = true;
+                    break;
+                }
+
+                if (fd == server_fd_->get()) {
+                    while (running_) {
                         sockaddr_in client_addr{};
                         socklen_t client_len = sizeof(client_addr);
-                        int client_raw_fd =
-                                accept(server_fd_->get(), reinterpret_cast<sockaddr *>(&client_addr), &client_len);
 
-                        if (client_raw_fd < 0) {
+                        int conn_fd = accept4(server_fd_->get(), reinterpret_cast<sockaddr *>(&client_addr),
+                                              &client_len, SOCK_NONBLOCK);
+                        if (conn_fd == -1) {
                             if (errno == EAGAIN || errno == EWOULDBLOCK)
                                 break;
-                            spdlog::error("accept failed: {}", strerror(errno));
+                            if (errno == EINTR)
+                                continue;
+                            NET_LOG_ERROR("Accept4 failed: {}", strerror(errno));
                             break;
                         }
 
-                        // Set client socket non-blocking for ET epoll
-                        fcntl(client_raw_fd, F_SETFL, fcntl(client_raw_fd, F_GETFL, 0) | O_NONBLOCK);
+                        net_utils::SocketPtr client_fd{new net_utils::SocketFd(conn_fd), net_utils::SocketDeleter{}};
 
-                        SocketPtr clientfd{new SocketFd(client_raw_fd), SocketDeleter{}};
-                        auto conn = handler(std::move(clientfd), client_addr);
-                        if (conn) {
-                            int conn_fd = conn->get_fd();
-                            auto epoll_conn = std::dynamic_pointer_cast<EpollConnection>(conn);
-                            if (!epoll_conn) {
-                                throw std::runtime_error("epoll connection is null");
-                            }
-                            connections_[conn_fd] = epoll_conn;
+                        char client_ip[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+                        NET_LOG_INFO("Client connected in multi-reactor: {}:{}", client_ip,
+                                     ntohs(client_addr.sin_port));
 
-                            ev.events = EPOLLIN | EPOLLET;
-                            ev.data.fd = conn_fd;
-                            if (epoll_ctl(epfd, EPOLL_CTL_ADD, conn_fd, &ev) == -1) {
-                                spdlog::error("epoll_ctl add client fd {} failed: {}", conn_fd, strerror(errno));
-                                connections_.erase(conn_fd);
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // Handle I/O events on existing client connections
-                if (connections_.contains(fd)) {
-                    if (events[i].events & EPOLLIN) {
-                        connections_[fd]->handle_read();
-                    }
-                    if (events[i].events & EPOLLOUT) {
-                        connections_[fd]->handle_write();
-                    }
-
-                    ev.data.fd = fd;
-                    if (connections_[fd]->has_pending_write()) {
-                        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
-                    } else {
-                        ev.events = EPOLLIN | EPOLLET;
-                    }
-                    epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev);
-                }
-            }
-
-            // Periodic idle connection cleanup (every 8 seconds)
-            auto now = std::chrono::steady_clock::now();
-            if (now - last_check >= std::chrono::seconds(8)) {
-                last_check = now;
-                std::vector<int> to_close;
-                for (const auto &pair: connections_) {
-                    const auto &conn = pair.second;
-                    if (conn->enable_idle_timeout_ && (now - conn->last_active_ > conn->idle_timeout_)) {
-                        spdlog::warn("Idle timeout {}s for {}, closing", conn->idle_timeout_.count(),
-                                     conn->get_peer_info());
-                        to_close.push_back(pair.first);
-                    }
-                }
-                for (int fd: to_close) {
-                    if (connections_.contains(fd)) {
-                        connections_[fd]->shutdown();
-                        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-                        connections_.erase(fd);
+                        size_t index = next_reactor_index_++ % sub_reactors_.size();
+                        sub_reactors_[index]->add_connection(std::move(client_fd), client_addr);
                     }
                 }
             }
         }
+    });
+    NET_LOG_INFO("Multi-reactor accept loop running");
+}
 
-        // Cleanup all remaining connections on shutdown
-        for (auto &pair: connections_) {
-            pair.second->shutdown();
-            epoll_ctl(epfd, EPOLL_CTL_DEL, pair.first, nullptr);
+void TcpServer::handle_accept(int listen_fd, const ClientHandler &handler) {
+    sockaddr_in client_addr{};
+    socklen_t client_len = sizeof(client_addr);
+
+    int client_raw_fd = accept(listen_fd, reinterpret_cast<sockaddr *>(&client_addr),&client_len);
+    if (client_raw_fd < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            NET_LOG_ERROR("Accept failed: {}", strerror(errno));
         }
-        connections_.clear();
-        spdlog::info("epoll mode shutdown complete");
+        return;
+    }
+    net_utils::set_nonblocking(client_raw_fd);
+
+    char client_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+    NET_LOG_INFO("New connection from {}", client_ip, ntohs(client_addr.sin_port));
+
+    try {
+        net_utils::SocketPtr client_fd{new net_utils::SocketFd(client_raw_fd),net_utils::SocketDeleter{}};
+        handler(std::move(client_fd),client_addr);
+    }catch (const std::exception &e) {
+        NET_LOG_ERROR("Failed to accept connection: {}", e.what());
+        net_utils::close_safe(client_raw_fd);
+    }
+}
+
+void TcpServer::wakeup() {
+    if (wakeup_pipe_[1] >= 0) {
+        char c = 'S';
+        ::write(wakeup_pipe_[1], &c, 1);
     }
 }
 
@@ -334,242 +289,22 @@ void TcpServer::shutdown() {
         return;
 
     should_stop_ = true;
-
-    // Wake up epoll_wait via pipe
-    char c = 'S';
-    ::write(s_wakeup_pipe_[1], &c, 1);
-
-    if (server_fd_ && server_fd_->valid()) {
-        ::shutdown(server_fd_->get(), SHUT_RDWR);
-    }
+    wakeup();
 
     if (accept_thread_.joinable()) {
         accept_thread_.join();
     }
-}
 
-void TcpServer::start_multi_reactor(const ClientHandler &handler) {
-    spdlog::info("start_multi_reactor with {} reactors", num_reactors_);
-
-    std::call_once(s_pipe_init_flag, &TcpServer::init_wakeup_pipe);
-
-    char buf[64];
-    while (::read(s_wakeup_pipe_[0], buf, sizeof(buf)) > 0) {
-        spdlog::debug("Cleared data from wakeup pipe");
+    for (auto &reactor: sub_reactors_) {
+        reactor->shutdown();
     }
+    sub_reactors_.clear();
 
-    epoll_fds_.resize(num_reactors_);
-    connections_per_reactor_.resize(num_reactors_);
+    server_fd_.reset();
 
-    for (int i = 0; i < num_reactors_; i++) {
-        epoll_fds_[i] = epoll_create1(0);
-        if (epoll_fds_[i] < 0) {
-            throw SocketException("epoll_create1 failed");
-        }
-    }
+    net_utils::close_safe(wakeup_pipe_[0]);
+    net_utils::close_safe(wakeup_pipe_[1]);
+    wakeup_pipe_[0] = wakeup_pipe_[1] = -1;
 
-    epoll_event ev{};
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = s_wakeup_pipe_[0];
-    if (epoll_ctl(epoll_fds_[0], EPOLL_CTL_ADD, s_wakeup_pipe_[0], &ev) == -1) {
-        spdlog::error("epoll ctl add wakeup_pipe failed");
-    }
-
-    ev.events = EPOLLIN | EPOLLET;
-    ev.data.fd = server_fd_->get();
-    if (epoll_ctl(epoll_fds_[0], EPOLL_CTL_ADD, server_fd_->get(), &ev) == -1) {
-        spdlog::error("epoll ctl add server_fd failed");
-    }
-
-    fcntl(server_fd_->get(), F_SETFL, fcntl(server_fd_->get(), F_GETFL, 0) | O_NONBLOCK);
-
-    for (int i = 0; i < num_reactors_; i++) {
-        reactor_threads_.emplace_back([this, i, handler, epfd = epoll_fds_[i]]() mutable {
-            spdlog::info("Reactor {} thread started,epfd={}", i, epfd);
-
-            epoll_event events[EPOLL_MAX_EVENTS];
-            auto last_check = std::chrono::steady_clock::now();
-            while (running_ && !should_stop_) {
-                int nfds = epoll_wait(epfd, events, EPOLL_MAX_EVENTS, 1000);
-                if (nfds < 0) {
-                    if (errno == EINTR)
-                        continue;
-                    spdlog::error("epoll_wait failed in reactor: {}", i);
-                    break;
-                }
-
-                for (int j = 0; j < nfds; j++) {
-                    int fd = events[j].data.fd;
-
-                    if (fd == s_wakeup_pipe_[0] && i == 0) {
-                        char buf[16];
-                        while (::read(s_wakeup_pipe_[0], buf, sizeof(buf)) > 0)
-                            ;
-                        should_stop_ = true;
-                        spdlog::info("Shutdown signal received in reactor 0");
-                        continue;
-                    }
-
-                    if (fd == server_fd_->get() && i == 0) {
-                        while (true) {
-                            sockaddr_in client_addr{};
-                            socklen_t client_len = sizeof(client_addr);
-                            int client_raw_fd =
-                                    accept(server_fd_->get(), reinterpret_cast<sockaddr *>(&client_addr), &client_len);
-
-                            if (client_raw_fd < 0) {
-                                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                                    break;
-                                spdlog::error("accept failed: {}", strerror(errno));
-                                continue;
-                            }
-
-                            fcntl(client_raw_fd, F_SETFL, O_NONBLOCK);
-
-                            SocketPtr clientfd{new SocketFd(client_raw_fd), SocketDeleter{}};
-                            auto conn = handler(std::move(clientfd), client_addr);
-                            if (conn) {
-                                int conn_fd = conn->get_fd();
-                                auto epoll_conn = std::dynamic_pointer_cast<EpollConnection>(conn);
-                                if (!epoll_conn)
-                                    continue;
-
-                                size_t target_reactor = next_reactor_index_++ % num_reactors_;
-
-                                {
-                                    {
-                                        std::lock_guard<std::mutex> lock(connections_mutex_);
-                                        connections_per_reactor_[target_reactor][conn_fd] = epoll_conn;
-                                    }
-                                }
-
-                                epoll_event ev{};
-                                ev.events = EPOLLIN | EPOLLET;
-                                ev.data.fd = conn_fd;
-                                epoll_ctl(epoll_fds_[target_reactor], EPOLL_CTL_ADD, conn_fd, &ev);
-                            }
-                        }
-                        continue;
-                    }
-                    std::shared_ptr<EpollConnection> conn;
-                    {
-                        std::lock_guard<std::mutex> lock(connections_mutex_);
-                        auto it = connections_per_reactor_[i].find(fd);
-                        if (it == connections_per_reactor_[i].end())
-                            continue;
-                        conn = it->second;
-                    }
-
-                    if (events[j].events & (EPOLLHUP | EPOLLERR)) {
-                        conn->handle_error();
-                        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-                        std::lock_guard<std::mutex> lock(connections_mutex_);
-                        connections_per_reactor_[i].erase(fd);
-                        continue;
-                    }
-
-                    if (events[j].events & EPOLLIN) {
-                        conn->handle_read();
-                    }
-
-                    if (events[j].events & EPOLLOUT) {
-                        conn->handle_write();
-                    }
-
-                    epoll_event ev{};
-                    ev.data.fd = fd;
-                    ev.events = EPOLLIN | EPOLLET;
-                    if (conn->has_pending_write())
-                        ev.events |= EPOLLOUT;
-                    epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);
-                }
-                auto now = std::chrono::steady_clock::now();
-                if (now - last_check >= std::chrono::seconds(8)) {
-                    last_check = now;
-                    std::vector<int> to_close;
-                    {
-                        std::lock_guard<std::mutex> lock(connections_mutex_);
-                        for (const auto &pair: connections_per_reactor_[i]) {
-                            const auto &conn = pair.second;
-                            if (conn->enable_idle_timeout_ && (now - conn->last_active_ > conn->idle_timeout_)) {
-                                to_close.push_back(pair.first);
-                            }
-                        }
-                    }
-                    for (int fd: to_close) {
-                        std::lock_guard<std::mutex> lock(connections_mutex_);
-                        auto it = connections_per_reactor_[i].find(fd);
-                        if (it != connections_per_reactor_[i].end()) {
-                            it->second->shutdown();
-                            epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-                            connections_per_reactor_[i].erase(it);
-                        }
-                    }
-                }
-            }
-            spdlog::info("Reactor {} loop exited", i);
-        });
-    }
-
-    spdlog::info("All reactor threads started, accept loop running");
-    while (running_ && !should_stop_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    spdlog::info("Shutdown requested, stopping all reactors");
-    for (auto &t: reactor_threads_) {
-        if (t.joinable())
-            t.join();
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        for (auto &map: connections_per_reactor_) {
-            for (auto &pair: map) {
-                pair.second->shutdown();
-            }
-            map.clear();
-        }
-    }
-
-    spdlog::info("Multi-reactor shutdown complete");
-}
-
-void TcpServer::distribute_connections(SocketPtr client_fd, const sockaddr_in &client_addr) {
-    size_t index = next_reactor_index_++ % sub_reactors_.size();
-    sub_reactors_[index]->add_connection(std::move(client_fd), client_addr);
-}
-
-void TcpServer::check_idle_timeout(std::unordered_map<int, std::shared_ptr<EpollConnection>> &conns, int epfd) {
-    static auto last_check = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-
-    if (now - last_check >= std::chrono::seconds(8))
-        return;
-    last_check = now;
-
-    std::vector<int> to_close;
-    for (const auto &pair: conns) {
-        const auto &conn = pair.second;
-        if (conn->enable_idle_timeout_ && (now - conn->last_active_ > conn->idle_timeout_)) {
-            spdlog::warn("Idle timeout {}s for {},closing", conn->idle_timeout_.count(), conn->get_peer_info());
-            to_close.push_back(pair.first);
-        }
-    }
-
-    for (int fd: to_close) {
-        if (conns.contains(fd)) {
-            conns[fd]->shutdown();
-            socket_utils::del_epoll(epfd, fd);
-            conns.erase(fd);
-        }
-    }
-}
-
-void TcpServer::cleanup_connections(std::unordered_map<int, std::shared_ptr<EpollConnection>> &conns, int epfd) {
-    for (auto &pair: conns) {
-        pair.second->shutdown();
-        socket_utils::del_epoll(epfd, pair.first);
-    }
-    conns.clear();
+    NET_LOG_INFO("Tcpserver shutdown complete");
 }

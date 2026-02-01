@@ -1,31 +1,39 @@
 #pragma once
+#include <deque>
+
 #include "BaseConnection.h"
 #include "http_types.h"
+
 class EpollConnection : public BaseConnection {
 public:
-    EpollConnection(SocketPtr sock,sockaddr_in addr,MessageHandler handler);
+    using HttpHandler = std::function<void(std::shared_ptr<EpollConnection>,const SimpleHttpRequest&,const std::string&)>;
+
+    EpollConnection(net_utils::SocketPtr sock,sockaddr_in addr,MessageHandler handler);
+
     void handle_read();
     void handle_write();
     void handle_error();
 
     int get_fd() const override {return socket_ ? socket_->get():-1;}
 
-    using HttpMessageHandler = std::function<void(BaseConnection*, const std::string&, const SimpleHttpRequest&)>;
-    void set_http_handler(HttpMessageHandler handler);
-    bool has_http_handler() const;
+    void set_http_handler(HttpHandler handler) {http_handler_ = std::move(handler);}
+    bool has_http_handler() const {return static_cast<bool>(http_handler_);}
+    void try_flush_output() override {
+        handle_write();
+    }
+
 private:
-    void process_http_request(const std::string&);
+    HttpHandler http_handler_;
+    std::optional<HttpParser> http_parser_;
+    std::string current_raw_buffer_;
 
-    enum class HttpReadState {
-        ReadingHeader,
-        ReadingBody
-    };
+    std::deque<std::pair<SimpleHttpRequest,std::string>> pending_requests_;
+    size_t pipeline_depth_ = 0;
 
-    HttpReadState http_state_ = HttpReadState::ReadingHeader;
-    size_t expected_body_size_ = 0;
-    std::string pending_header_;
-    std::string pending_body_;
+    bool protocol_determined_ = false;
+    bool use_http_mode_ = false;
 
-    HttpMessageHandler http_handler_ = nullptr;
+    void handle_line_protocol();
+
 
 };

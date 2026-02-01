@@ -33,7 +33,7 @@ int main() {
                         received = true;
                         break;
                     }
-                }catch (const SocketException& e) {
+                }catch (const net_utils::SyscallException& e) {
                     spdlog::error("Receive attempt {} failed: {}",attempt+1, e.what());
                     break;
                 }
@@ -43,7 +43,7 @@ int main() {
                 spdlog::warn("No message received after {} attempts",20);
             }
         }
-    } catch (const SocketException& e) {
+    } catch (const net_utils::SyscallException& e) {
         spdlog::error("Client error: {}", e.what());
     }
     return 0;

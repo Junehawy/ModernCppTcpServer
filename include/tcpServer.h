@@ -1,56 +1,54 @@
 #pragma once
-#include <functional>
+#include <netinet/tcp.h>
 #include <thread>
-#include "EpollConnection.h"
+
 #include "ClientHandler.h"
+#include "EpollConnection.h"
 #include "SubReactor.h"
-#include "socketUtils.h"
+#include "net_utils.h"
 
 class TcpServer {
 public:
-
-    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN,bool use_epoll = true);
-    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN,bool use_epoll = true,int num_reactors = 7);
+    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, bool use_epoll = true);
+    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, bool use_epoll = true, int num_reactors = 1);
     ~TcpServer();
 
-    TcpServer(const TcpServer&) = delete;
-    TcpServer& operator=(const TcpServer&) = delete;
+    TcpServer(const TcpServer &) = delete;
+    TcpServer &operator=(const TcpServer &) = delete;
 
-    void start(const ClientHandler& handler);
+    void start(const ClientHandler &handler);
     void shutdown();
+    bool is_running() const {return running_.load(std::memory_order_acquire);}
 
+    static TcpServer* instance() {
+        return instance_.load(std::memory_order_acquire);
+    }
 private:
-    SocketPtr server_fd_;
+    net_utils::SocketPtr server_fd_;
     int port_;
     int backlog_;
     bool use_epoll_;
+    int num_reactors_ = 1; // Default single reactor
 
     std::jthread accept_thread_;
-    std::atomic<bool> running_ { true };
-    std::atomic<bool> should_stop_ { false };
+    std::atomic<bool> running_{false};
+    std::atomic<bool> should_stop_{false};
 
-    static int s_wakeup_pipe_[2];
-    static std::once_flag s_pipe_init_flag;
+    static std::atomic<TcpServer *> instance_;
+    static std::mutex instance_mutex_;
 
-    std::unordered_map<int, std::shared_ptr<EpollConnection>> connections_;
+    int wakeup_pipe_[2] = {-1,-1};
 
-    void start_blocking(const ClientHandler& handler);
-    void start_epoll(const ClientHandler& handler);
+    void start_blocking(const ClientHandler &handler);
+    void start_single_epoll(const ClientHandler &handler);
+    void start_multi_epoll(const ClientHandler &handler);
 
-    static void init_wakeup_pipe();
-    static void signal_handler(int sig);
+    void handle_accept(int listen_fd,const ClientHandler &handler);
+    void wakeup();
 
     std::vector<std::unique_ptr<SubReactor>> sub_reactors_;
     std::atomic<size_t> next_reactor_index_{0};
-    std::mutex connections_mutex_;
-    std::vector<int> epoll_fds_;
-    std::vector<std::unordered_map<int, std::shared_ptr<EpollConnection>>> connections_per_reactor_;
-    std::vector<std::thread> reactor_threads_;
-    int num_reactors_ = 1; //Default single reactor
 
-    void check_idle_timeout(std::unordered_map<int,std::shared_ptr<EpollConnection>>& conns,int epfd);
-    void cleanup_connections(std::unordered_map<int,std::shared_ptr<EpollConnection>>& conns,int epfd);
+    static void signal_handler(int sig);
 
-    void start_multi_reactor(const ClientHandler& handler);
-    void distribute_connections(SocketPtr client_fd,const sockaddr_in& client_addr);
 };

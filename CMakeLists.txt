@@ -14,7 +14,6 @@ include_directories(include)
 add_library(tcp_socket STATIC
         src/lib_src/tcpServer.cpp
         src/lib_src/tcpClient.cpp
-        src/lib_src/socketUtils.cpp
         src/lib_src/BaseConnection.cpp
         src/lib_src/EpollConnection.cpp
         src/lib_src/http_types.cpp
