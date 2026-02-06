@@ -1,6 +1,7 @@
 #pragma once
 #include <map>
 #include <string>
+#include <unordered_map>
 
 // Simplified HTTP request representation
 struct SimpleHttpRequest {
@@ -17,11 +18,37 @@ struct SimpleHttpRequest {
     std::string content_type;
     std::string body;
 
-    bool parse_sucess = false;
+    bool parse_success = false;
     std::string parser_error;
 };
 
-// Incremental HTTP parser
+// Simplified HTTP response representation
+struct SimpleHttpResponse {
+    int status_code = 200;
+    std::string status_text = "OK";
+    std::string content_type = "text/plain";
+    std::string body;
+    std::unordered_map<std::string, std::string> headers;
+    bool keep_alive = true;
+
+    std::string to_string() const {
+        std::string response = "HTTP/1.1 " + std::to_string(status_code) + " " + status_text+ "\r\n";
+        response += "Content-Type: " + content_type + "\r\n";
+        response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+        response += "Connection: " + std::string(keep_alive ? "keep-alive" : "close") + "\r\n";
+
+        for (const auto& [key,value]:headers) {
+            response += key + ": " + value + "\r\n";
+        }
+
+        response += "\r\n";
+        response += body;
+
+        return response;
+    }
+};
+
+// HTTP parser
 class HttpParser {
 public:
     enum class State { ExpectRequestLine, ExpectHeader, ExpectBody, Complete, Error };
@@ -49,5 +76,3 @@ private:
     bool parse_header_line(const std::string &line);
     void check_headers();
 };
-
-SimpleHttpRequest parse_simple_http(const std::string &raw_request);

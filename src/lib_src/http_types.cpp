@@ -146,7 +146,7 @@ void HttpParser::check_headers() {
 // Move semantics: prevents copying large bodies
 SimpleHttpRequest HttpParser::get_request() {
     SimpleHttpRequest result = std::move(current_req_);
-    result.parse_sucess = (state_ == State::Complete);
+    result.parse_success = (state_ == State::Complete);
     reset();
     return result;
 }

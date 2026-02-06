@@ -1,5 +1,6 @@
 #pragma once
 #include <netinet/tcp.h>
+#include <signal.h>
 #include <thread>
 
 #include "ClientHandler.h"
@@ -7,12 +8,10 @@
 #include "SubReactor.h"
 #include "net_utils.h"
 
-
 // TCP server supporting multiple I/O strategies
 class TcpServer {
 public:
-    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, bool use_epoll = true);
-    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, bool use_epoll = true, int num_reactors = 1);
+    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, size_t num_reactors = 1);
     ~TcpServer();
 
     TcpServer(const TcpServer &) = delete;
@@ -20,36 +19,31 @@ public:
 
     void start(const ClientHandler &handler);
     void shutdown();
-    bool is_running() const { return !stop_source_.stop_requested(); }
-
-    static TcpServer *instance() { return instance_.load(std::memory_order_acquire); }
+    [[nodiscard]] bool is_running() const { return running_.load(); }
+    std::stop_token get_stop_token() const {return stop_source_.get_token();}
 
 private:
     net_utils::SocketPtr server_fd_;
     int port_;
     int backlog_;
-    bool use_epoll_;
-    int num_reactors_ = 1;  // Default single reactor
+    size_t num_reactors_;
 
     std::jthread accept_thread_;
+    std::atomic<bool> running_{false};
     std::stop_source stop_source_;
 
     ClientHandler client_handler_;
 
-    static std::atomic<TcpServer *> instance_;
-    static std::mutex instance_mutex_;
+    int event_fd_ = -1;
 
-    int wakeup_pipe_[2] = {-1, -1};
+    void start_blocking(std::stop_token st) const;
+    void start_single_epoll(std::stop_token st);
+    void start_multi_epoll(std::stop_token st);
 
-    void start_blocking(const ClientHandler &handler, const std::stop_token &st) const;
-    void start_single_epoll(const ClientHandler &handler, const std::stop_token &st);
-    void start_multi_epoll(const ClientHandler &handler, const std::stop_token &st);
-
-    void handle_accept(int listen_fd, const ClientHandler &handler) const;
+    bool handle_accept() const;
     void wakeup() const;
+
 
     std::vector<std::unique_ptr<SubReactor>> sub_reactors_;
     std::atomic<size_t> next_reactor_index_{0};     // Round-robin distribution
-
-    static void signal_handler(int sig);
 };

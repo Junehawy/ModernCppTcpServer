@@ -20,3 +20,6 @@ constexpr size_t MAX_HTTP_PIPELINE = 100;
 // Timeout configuration
 constexpr auto DEFAULT_IDLE_TIMEOUT = std::chrono::seconds(60);
 constexpr auto DEFAULT_CONNECT_TIMEOUT = std::chrono::seconds(5);
+
+// TcpServer configuration
+constexpr size_t MAX_ACCEPT_PER_LOOP = 100;

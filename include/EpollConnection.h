@@ -28,7 +28,7 @@ public:
     void buffer_output() override;
 
 private:
-    HttpHandler http_handler_;                  // Optional HTTP callback
+    HttpHandler http_handler_;                  // HTTP callback
     std::optional<HttpParser> http_parser_;     // Stateful HTTP parser
     std::string current_raw_buffer_;
 

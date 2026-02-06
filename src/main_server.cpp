@@ -4,19 +4,85 @@
 #include <spdlog/sinks/rotating_file_sink-inl.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
-#include <thread>
 
 #include "../include/stringUtils.h"
 #include "../include/tcpServer.h"
+#include "http_router.h"
 #include "http_types.h"
 
+HttpRouter g_router;
+
+// Register demo routes
+void setup_routes() {
+    g_router.get("/", [](const auto &req, auto &resp) {
+        resp.body = "Welcome to Tiny HTTP Server!\n";
+        resp.content_type = "text/plain";
+    });
+
+    // GET /hello
+    g_router.get("/hello", [](const auto &req, auto &resp) {
+        resp.body = "Hello from tiny HTTP server!\n";
+        resp.content_type = "text/plain";
+    });
+
+    // GET /json
+    g_router.get("/json", [](const auto &req, auto &resp) {
+        resp.body = R"({"status":"ok","message":"welcome to my server"})";
+        resp.content_type = "application/json";
+    });
+
+    // POST /echo
+    g_router.post("/echo", [](const auto &req, auto &resp) {
+        resp.body = "You sent:\n" + req.body;
+        resp.content_type = "text/plain";
+    });
+
+    // GET /info
+    g_router.get("/info", [](const auto &req, auto &resp) {
+        std::string info = "Method: " + req.method + "\n";
+        info += "Path: " + req.path + "\n";
+        info += "Version: " + req.version + "\n";
+        info += "Host: " + req.host + "\n";
+        info += "User-Agent: " + req.user_agent + "\n";
+        info += "\nHeaders:\n";
+        for (const auto &[key, value]: req.headers) {
+            info += "  " + key + ": " + value + "\n";
+        }
+
+        resp.body = info;
+        resp.content_type = "text/plain";
+    });
+}
+
+// HTTP request handler called from EpollConnection
+void handle_http_request(const std::shared_ptr<EpollConnection>& conn,
+                        const SimpleHttpRequest& req,
+                        const std::string& raw_request) {
+    spdlog::info("[HTTP] {} {} from {}", req.method, req.path, conn->get_peer_info());
+
+    SimpleHttpResponse response = g_router.handle(req);
+
+    conn->send(response.to_string());
+}
+
 int main() {
+    // Block SIGINT/SIGTERM for clean handling via sigwait
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+
+    if (pthread_sigmask(SIG_BLOCK, &mask, nullptr) != 0) {
+        std::cerr << "Failed to block signals\n";
+        return 1;
+    }
+
     try {
         // Initialize async spdlog with console + rotating file
         spdlog::init_thread_pool(8192, 1);
 
         const auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        console_sink->set_level(spdlog::level::info);
+        console_sink->set_level(spdlog::level::debug);
         console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%t] %v");
 
         const auto file_sink =
@@ -30,7 +96,8 @@ int main() {
                 "server", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
 
         spdlog::set_default_logger(logger);
-        spdlog::set_level(spdlog::level::info);
+        spdlog::set_default_logger(logger);
+        spdlog::set_level(spdlog::level::off);
 
         spdlog::info("spdlog initialized");
     } catch (const spdlog::spdlog_ex &ex) {
@@ -38,9 +105,11 @@ int main() {
         return 1;
     }
 
+    setup_routes();
+    spdlog::info("Routes registered");
+
     try {
-        constexpr bool use_epoll = true;
-        TcpServer server(9999, 1024, use_epoll, 8);
+        TcpServer server(9999, 1024,8);
 
         // Start server and define client connection handler
         server.start([&](net_utils::SocketPtr client_fd,
@@ -52,38 +121,9 @@ int main() {
                                                               self->send(response);
                                                           });
 
-            conn->set_http_handler([](const std::shared_ptr<EpollConnection> &self, const SimpleHttpRequest &req,
-                                      const std::string &raw_request) {
-                spdlog::info("[HTTP] {} {} from {}", req.method, req.path, self->get_peer_info());
+            // Set http hadnler
+            conn ->set_http_handler(handle_http_request);
 
-                std::string body;
-                std::string content_type = "text/plain";
-
-                if (req.path == "/" || req.path == "/hello") {
-                    body = "Hello from tiny HTTP server!\n";
-                } else if (req.path == "/json") {
-                    body = R"({"status":"ok","message":"welcome to my server"})";
-                    content_type = "application/json";
-                } else if (req.path == "/echo") {
-                    body = "You sent:\n" + raw_request.substr(0, 500);
-                    content_type = "text/plain";
-                } else {
-                    body = "404 Not Found\n";
-                }
-
-                const std::string response = "HTTP/1.1 200 OK\r\n"
-                                             "Content-Type: " +
-                                             content_type +
-                                             "\r\n"
-                                             "Content-Length: " +
-                                             std::to_string(body.size()) +
-                                             "\r\n"
-                                             "Connection: keep-alive\r\n"
-                                             "\r\n" +
-                                             body;
-
-                self->send(response);
-            });
             // Enable 60-second idle timeout
             conn->enable_idle_timeout(true);
             conn->set_idle_timeout(std::chrono::seconds(60));
@@ -91,11 +131,13 @@ int main() {
             return conn;
         });
 
-        while (server.is_running()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
+        // Wait for termination signal
+        int sig;
+        sigwait(&mask, &sig);
+        spdlog::info("Caught signal {}, shutting down ...", sig);
 
-        spdlog::info("All connections closed, server exited.");
+        server.shutdown();
+        spdlog::info("Server shutdown complete, exiting.");
     } catch (const std::exception &e) {
         spdlog::error("Server error: {}", e.what());
         return 1;
