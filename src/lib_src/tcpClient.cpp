@@ -1,13 +1,13 @@
 #include "../../include/tcpClient.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
-#include <iostream>
+#include <utility>
 #include <netinet/in.h>
 #include <poll.h>
 
 #include "spdlog/spdlog.h"
 
-TcpClient::TcpClient(const std::string &server_ip, const int port) : server_ip_(server_ip), port_(port) {
+TcpClient::TcpClient(std::string server_ip, const int port) : server_ip_(std::move(server_ip)), port_(port) {
     ensure_connection();
 }
 
@@ -137,4 +137,73 @@ std::string TcpClient::receive(const size_t max_len) {
     result.resize(n);
     last_active_time_ = std::chrono::steady_clock::now();
     return result;
+}
+
+void TcpClient::send_protobuf(const moderncpp::Request &req) {
+    if (!connected_) throw std::runtime_error("Not connected");
+
+    std::string data;
+    if (!req.SerializeToString(&data)) {
+        throw net_utils::SyscallException("Serialize failed");
+    }
+
+    uint32_t len = htonl(data.size());
+    if (net_utils::writen(sock_fd_->get(), &len, sizeof(len)) != sizeof(len)) {
+        connected_ = false;
+        throw net_utils::SyscallException("Send length prefix failed");
+    }
+
+    if (net_utils::writen(sock_fd_->get(), data.data(), data.size()) != data.size()) {
+        connected_ = false;
+        throw net_utils::SyscallException("Send data failed");
+    }
+    last_active_time_ = std::chrono::steady_clock::now();
+}
+
+moderncpp::Response TcpClient::receive_protobuf() {
+    if (!connected_) {
+        throw std::runtime_error("Not connected");
+    }
+
+    char len_buf[4];
+    ssize_t n = net_utils::readn(sock_fd_->get(), len_buf, 4);
+    if (n != 4) {
+        connected_ = false;
+        const std::string err_msg = (n == 0) ? "Server closed connection (EOF during length read)"
+                                       : "Failed to read length prefix (got " + std::to_string(n) + " bytes)";
+        throw net_utils::SyscallException(err_msg);
+    }
+
+    uint32_t resp_len = ntohl(*reinterpret_cast<uint32_t*>(len_buf));
+    spdlog::debug("Response length prefix: {} bytes", resp_len);
+
+    if (resp_len > 10 * 1024 * 1024) {
+        connected_ = false;
+        throw std::runtime_error("Response length too large: " + std::to_string(resp_len));
+    }
+
+    if (resp_len == 0) {
+        spdlog::warn("Received empty response (length 0)");
+        return {};
+    }
+
+    std::string resp_data(resp_len, '\0');
+    n = net_utils::readn(sock_fd_->get(), resp_data.data(), resp_len);
+    if (n != static_cast<ssize_t>(resp_len)) {
+        connected_ = false;
+        throw net_utils::SyscallException(
+            "Incomplete response body: read " + std::to_string(n) +
+            " / expected " + std::to_string(resp_len) + " bytes");
+    }
+
+    moderncpp::Response resp;
+    if (!resp.ParseFromString(resp_data)) {
+        throw std::runtime_error("Failed to parse Protobuf response");
+    }
+
+    last_active_time_ = std::chrono::steady_clock::now();
+    spdlog::debug("Parsed response: code={}, message_len={}, data_len={}",
+                  resp.code(), resp.message().size(), resp.data().size());
+
+    return resp;
 }

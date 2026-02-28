@@ -40,47 +40,7 @@ void EpollConnection::handle_read() {
 
         update_active_time();
 
-        // Auto-detect protocol based on first bytes
-        if (!protocol_determined_ && input_buffer_.readable_bytes() > 0) {
-            const char *data = input_buffer_.peek();
-            const size_t len = input_buffer_.readable_bytes();
-
-            const size_t check_len = std::min(len, static_cast<size_t>(128));
-            std::string_view peek_view(data, check_len);
-
-            static const std::vector<std::string_view> http_starts = {
-                    "GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "};
-
-            bool looks_like_http = false;
-            for (const auto &prefix: http_starts) {
-                if (peek_view.starts_with(prefix)) {
-                    looks_like_http = true;
-                    break;
-                }
-            }
-
-            // Check if contains "HTTP/"
-            if (!looks_like_http) {
-                std::string_view full_view(data, len);
-                if (const size_t pos = full_view.find(" HTTP/"); pos != std::string_view::npos && pos < 100) {
-                    looks_like_http = true;
-                }
-            }
-
-            if (looks_like_http) {
-                use_http_mode_ = true;
-
-                // Create HTTP parser
-                if (!http_parser_.has_value()) {
-                    http_parser_.emplace();
-                }
-            } else {
-                use_http_mode_ = false;
-                http_handler_ = nullptr;
-            }
-
-            protocol_determined_ = true;
-        }
+        protocol_detected();
 
         // HTTP mode: incremental parse with pipelining support
         if (use_http_mode_ || has_http_handler()) {
@@ -136,7 +96,7 @@ void EpollConnection::handle_read() {
                         return;
                     }
                 } else {
-                    break;  // Data is imcomplete
+                    break; // Data is imcomplete
                 }
             }
 
@@ -170,6 +130,8 @@ void EpollConnection::handle_read() {
             if (should_close && pending_requests_.empty()) {
                 shutdown();
             }
+        } else if (use_protobuf_mode_) {
+            handle_protobuf();
         } else {
             handle_line_protocol();
         }
@@ -274,4 +236,157 @@ void EpollConnection::buffer_output() {
             NET_LOG_ERROR("Failed to enable writing: {}", e.what());
         }
     }
+}
+
+void EpollConnection::protocol_detected() {
+    if (!protocol_determined_ && input_buffer_.readable_bytes() > 0) {
+        const char *data = input_buffer_.peek();
+        const size_t len = input_buffer_.readable_bytes();
+
+        const size_t check_len = std::min(len, static_cast<size_t>(128));
+        std::string_view peek_view(data, check_len);
+
+        static const std::vector<std::string_view> http_starts = {"GET ",     "POST ",  "HEAD ",    "PUT ",  "DELETE ",
+                                                                  "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "};
+
+        bool looks_like_http = false;
+        for (const auto &prefix: http_starts) {
+            if (peek_view.starts_with(prefix)) {
+                looks_like_http = true;
+                break;
+            }
+        }
+
+        // Check if contains "HTTP/"
+        if (!looks_like_http) {
+            std::string_view full_view(data, len);
+            if (const size_t pos = full_view.find(" HTTP/"); pos != std::string_view::npos && pos < 100) {
+                looks_like_http = true;
+            }
+        }
+
+        if (looks_like_http) {
+            use_http_mode_ = true;
+
+            // Create HTTP parser
+            if (!http_parser_.has_value()) {
+                http_parser_.emplace();
+            }
+        } else {
+            use_http_mode_ = false;
+            http_handler_ = nullptr;
+        }
+
+        const bool has_newline = (memchr(data, '\n', len) != nullptr);
+        bool looks_text = has_newline;
+        if (looks_text) {
+            for (size_t i = 0; i < std::min(len, static_cast<size_t>(32)); ++i) {
+                if (const auto c = static_cast<unsigned char>(data[i]); c < 32 && c != '\r' && c != '\n' && c != '\t') {
+                    looks_text = false;
+                    break;
+                }
+            }
+        }
+
+        if (looks_text) {
+            protocol_determined_ = true;
+            use_protobuf_mode_ = false;
+            spdlog::info("{} fallback to text/line protocol", get_peer_info());
+            handle_line_protocol();
+            return;
+        }
+
+        use_protobuf_mode_ = true;
+        protocol_determined_ = true;
+    }
+}
+
+void EpollConnection::handle_protobuf() {
+    while (input_buffer_.readable_bytes() >= 4 && is_alive()) {
+        if (!length_read_) {
+            uint32_t net_len;
+            std::memcpy(&net_len, input_buffer_.peek(), 4);
+            expected_length_ = be32toh(net_len);
+            input_buffer_.retrieve(4);
+            length_read_ = true;
+
+            if (expected_length_ > 4 * 1024 * 1024) {
+                NET_LOG_ERROR("Protocol buffer overflow length: {} bytes", expected_length_);
+                shutdown();
+                return;
+            }
+        }
+
+        if (input_buffer_.readable_bytes() >= expected_length_) {
+            std::string pb_data(input_buffer_.peek(), expected_length_);
+            input_buffer_.retrieve(expected_length_);
+
+            moderncpp::Request req;
+            if (!req.ParseFromString(pb_data)) {
+                NET_LOG_ERROR("Protobuf parse failed from {}", get_peer_info());
+                send_protobuf_error(400, "Invalid Protobuf");
+                length_read_ = false;
+                continue;
+            }
+            handle_protobuf_request(req);
+            length_read_ = false;
+        } else {
+            break;
+        }
+    }
+}
+
+void EpollConnection::handle_protobuf_request(const moderncpp::Request &req) {
+    moderncpp::Response resp;
+    resp.set_code(200);
+    resp.set_message("OK");
+
+    std::string method = req.method();
+    NET_LOG_INFO("{} Protobuf request: method='{}', body_size={}", get_peer_info(), method, req.body().size());
+
+    if (method == "PING") {
+        resp.set_message("PONG");
+    } else if (method == "ECHO") {
+        resp.set_data(req.body());
+        resp.set_message("Echo: " + req.body());
+    } else {
+        resp.set_code(404);
+        resp.set_message("Unknown method: " + method);
+    }
+
+    send_protobuf(resp);
+}
+
+void EpollConnection::send_protobuf(const moderncpp::Response &resp_in) {
+    moderncpp::Response resp = resp_in;
+
+    if (resp.code() == 0)
+        resp.set_code(200);
+    if (resp.message().empty())
+        resp.set_message("OK");
+
+    std::string serialized;
+    if (!resp.SerializeToString(&serialized)) {
+        NET_LOG_ERROR("Failed to serialize Response for {}", get_peer_info());
+        return;
+    }
+
+    if (serialized.empty()) {
+        NET_LOG_WARN("Empty serialized Response, sending dummy");
+        serialized = "empty";
+    }
+
+    uint32_t len = htobe32(static_cast<uint32_t>(serialized.size()));
+    std::string prefix(reinterpret_cast<const char *>(&len), 4);
+
+    NET_LOG_DEBUG("Sending Protobuf response: len={}, code={}, msg={}", serialized.size(), resp.code(), resp.message());
+
+    send(prefix + serialized);
+}
+
+void EpollConnection::send_protobuf_error(int code, const std::string &msg) {
+    moderncpp::Response resp;
+    resp.set_code(code);
+    resp.set_message(msg);
+    send_protobuf(resp);
 }

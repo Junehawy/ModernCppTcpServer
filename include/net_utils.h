@@ -101,6 +101,27 @@ namespace net_utils {
         return count;
     }
 
+    inline ssize_t readn(int fd, void *buf, size_t count) {
+        size_t nleft = count;
+        char *ptr = static_cast<char *>(buf);
+
+        while (nleft > 0) {
+            ssize_t nread = read(fd, ptr, nleft);
+            if (nread < 0) {
+                if (errno == EINTR)
+                    continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    return count - nleft;
+                return -1;
+            }
+            if (nread == 0)
+                return -1;
+            nleft -= nread;
+            ptr += nread;
+        }
+        return count;
+    }
+
     // Epoll encapsulation
     inline int epoll_create() {
         int epfd = epoll_create1(0);
@@ -124,9 +145,7 @@ namespace net_utils {
         check_syscall(epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev), "epoll_ctl MOD", loc);
     }
 
-    inline void epoll_del(const int epfd, const int fd) {
-        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-    }
+    inline void epoll_del(const int epfd, const int fd) { epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr); }
 
     // Socket RAII
     struct SocketFd {

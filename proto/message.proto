@@ -1,11 +1,16 @@
 syntax = "proto3";
 
-package example;
+package moderncpp;
 
-message EchoRequest {
-  string text = 1;
+message Request {
+  string method      = 1;
+  string path        = 2;
+  bytes  body        = 3;
+  map<string, string> headers = 4;
 }
 
-message EchoResponse {
-  string text = 1;
+message Response {
+  int32  code        = 1;
+  string message     = 2;
+  bytes  data        = 3;
 }

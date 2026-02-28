@@ -3,6 +3,7 @@
 
 #include "BaseConnection.h"
 #include "http_types.h"
+#include "message.pb.h"
 
 class SubReactor;
 
@@ -39,5 +40,16 @@ private:
     bool use_http_mode_ = false;
     SubReactor *reactor_ = nullptr;
 
+    bool use_protobuf_mode_ = false;
+    bool length_read_ = false;
+    uint32_t expected_length_ = 0;
+    std::string current_pb_buffer_;
+
+    void handle_protobuf();
+    void handle_protobuf_request(const moderncpp::Request &req);
+    void send_protobuf(const moderncpp::Response& resp_in);
+    void send_protobuf_error(int code, const std::string &msg);
+
     void handle_line_protocol();                // Process \n delimited messages
+    void protocol_detected();
 };
