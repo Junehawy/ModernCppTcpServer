@@ -34,7 +34,7 @@ void BaseConnection::shutdown() {
             constexpr linger ling{1, 5};
             net_utils::check_syscall(setsockopt(fd, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling)),
                                      "setsockopt SO_LINGER");
-            ::shutdown(fd, SHUT_RDWR);
+            net_utils::close_safe(fd);
         }
         socket_.reset();
 

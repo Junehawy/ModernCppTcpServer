@@ -11,6 +11,14 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 include_directories(include)
 
+find_package(Protobuf REQUIRED)
+
+set(PROTO_FILES
+        proto/message.proto
+)
+
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
+
 add_library(tcp_socket STATIC
         src/lib_src/tcpServer.cpp
         src/lib_src/tcpClient.cpp
@@ -18,18 +26,31 @@ add_library(tcp_socket STATIC
         src/lib_src/EpollConnection.cpp
         src/lib_src/http_types.cpp
         src/lib_src/SubReactor.cpp
+        ${PROTO_SRCS}
 )
 
-target_link_directories(tcp_socket PRIVATE pthread)
+target_include_directories(tcp_socket PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(tcp_socket PRIVATE pthread)
 
 add_executable(server src/main_server.cpp)
 add_executable(client src/main_client.cpp)
 
-target_link_libraries(server PRIVATE tcp_socket pthread)
-target_link_libraries(client PRIVATE tcp_socket pthread)
+target_link_libraries(tcp_socket PUBLIC
+        spdlog::spdlog
+        protobuf::libprotobuf
+)
+
+target_link_libraries(server PRIVATE
+        tcp_socket
+        pthread
+        protobuf::libprotobuf
+)
+
+target_link_libraries(client PRIVATE
+        tcp_socket
+        pthread
+        protobuf::libprotobuf
+)
 
 add_subdirectory(extern/spdlog)
-
-target_link_libraries(tcp_socket PUBLIC spdlog::spdlog)
-target_link_libraries(server PRIVATE tcp_socket spdlog::spdlog pthread)
-target_link_libraries(client PRIVATE tcp_socket spdlog::spdlog pthread)

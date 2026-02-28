@@ -1,6 +1,5 @@
 #pragma once
 #include <netinet/tcp.h>
-#include <signal.h>
 #include <thread>
 
 #include "ClientHandler.h"
@@ -20,7 +19,7 @@ public:
     void start(const ClientHandler &handler);
     void shutdown();
     [[nodiscard]] bool is_running() const { return running_.load(); }
-    std::stop_token get_stop_token() const {return stop_source_.get_token();}
+    [[nodiscard]] std::stop_token get_stop_token() const {return stop_source_.get_token();}
 
 private:
     net_utils::SocketPtr server_fd_;
@@ -36,11 +35,10 @@ private:
 
     int event_fd_ = -1;
 
-    void start_blocking(std::stop_token st) const;
     void start_single_epoll(std::stop_token st);
     void start_multi_epoll(std::stop_token st);
 
-    bool handle_accept() const;
+    [[nodiscard]] bool handle_accept() const;
     void wakeup() const;
 
 

@@ -10,6 +10,7 @@ SubReactor::SubReactor(const ClientHandler &clientHandler) : clientHandler_(clie
     try {
         epoll_fd_ = net_utils::EpollFd();
 
+
         // Create eventfd for cross-thread wakeup
         wake_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
         if (wake_fd_ < 0) {

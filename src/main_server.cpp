@@ -1,5 +1,6 @@
 #include <iostream>
 #include <mutex>
+#include <csignal>
 #include <spdlog/async.h>
 #include <spdlog/sinks/rotating_file_sink-inl.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -9,6 +10,7 @@
 #include "../include/tcpServer.h"
 #include "http_router.h"
 #include "http_types.h"
+#include "message.pb.h"
 
 HttpRouter g_router;
 
@@ -60,7 +62,7 @@ void handle_http_request(const std::shared_ptr<EpollConnection>& conn,
                         const std::string& raw_request) {
     spdlog::info("[HTTP] {} {} from {}", req.method, req.path, conn->get_peer_info());
 
-    SimpleHttpResponse response = g_router.handle(req);
+    const SimpleHttpResponse response = g_router.handle(req);
 
     conn->send(response.to_string());
 }
@@ -97,7 +99,7 @@ int main() {
 
         spdlog::set_default_logger(logger);
         spdlog::set_default_logger(logger);
-        spdlog::set_level(spdlog::level::off);
+        spdlog::set_level(spdlog::level::info);
 
         spdlog::info("spdlog initialized");
     } catch (const spdlog::spdlog_ex &ex) {

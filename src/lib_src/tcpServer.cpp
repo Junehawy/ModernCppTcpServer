@@ -6,7 +6,6 @@
 #include <spdlog/spdlog.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include <sys/signalfd.h>
 #include <unistd.h>
 
 TcpServer::TcpServer(const int port, const int backlog, const size_t num_reactors) :
@@ -57,16 +56,9 @@ TcpServer::~TcpServer() {
         // Never throw from destructor
         NET_LOG_ERROR("Exception in TcpServer destructor: {}", e.what());
     }
-
-    net_utils::close_safe(event_fd_);
-
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGTERM);
 }
 
-// Start server: choose epoll/blocking mode
+// Start server: choose singal/multi mode
 void TcpServer::start(const ClientHandler &handler) {
     if (!handler) {
         throw std::invalid_argument("Client handler cannot be null");
@@ -79,14 +71,14 @@ void TcpServer::start(const ClientHandler &handler) {
         auto token = get_stop_token();
 
         if (num_reactors_ <= 1) {
-            accept_thread_ = std::jthread([this](std::stop_token) {
+            accept_thread_ = std::jthread([this,token](std::stop_token) {
                 try {
-                    start_single_epoll(stop_source_.get_token());
+                    start_single_epoll(token);
                 } catch (const std::exception &e) {
                     NET_LOG_ERROR("Exception in single epoll mode: {}", e.what());
                     running_ = false;
                 }
-            });
+            },token);
         } else {
             try {
                 for (size_t i = 0; i < num_reactors_; ++i) {
@@ -98,14 +90,14 @@ void TcpServer::start(const ClientHandler &handler) {
                 throw;
             }
 
-            accept_thread_ = std::jthread([this](std::stop_token) {
+            accept_thread_ = std::jthread([this,token](std::stop_token) {
                 try {
-                    start_multi_epoll(stop_source_.get_token());
+                    start_multi_epoll(token);
                 } catch (const std::exception &e) {
                     NET_LOG_ERROR("Exception in multi epoll mode: {}", e.what());
                     running_ = false;
                 }
-            });
+            },token);
         }
 
     } catch (const std::exception &e) {
@@ -233,7 +225,7 @@ void TcpServer::start_multi_epoll(std::stop_token st) {
                                     break;
                                 }
 
-                                size_t index = next_reactor_index_++ % num_reactors_;
+                                const size_t index = next_reactor_index_++ % num_reactors_;
                                 sub_reactors_[index]->add_connection(std::move(client_fd), client_addr);
                                 accept_count++;
                             } catch (const std::exception &e) {
