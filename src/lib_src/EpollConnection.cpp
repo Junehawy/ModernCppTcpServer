@@ -267,15 +267,17 @@ void EpollConnection::protocol_detected() {
 
         if (looks_like_http) {
             use_http_mode_ = true;
+            use_protobuf_mode_ = false;
+            protocol_determined_ = true;
 
-            // Create HTTP parser
             if (!http_parser_.has_value()) {
                 http_parser_.emplace();
             }
-        } else {
-            use_http_mode_ = false;
-            http_handler_ = nullptr;
+            return;
         }
+
+        use_http_mode_ = false;
+        http_handler_ = nullptr;
 
         const bool has_newline = (memchr(data, '\n', len) != nullptr);
         bool looks_text = has_newline;
