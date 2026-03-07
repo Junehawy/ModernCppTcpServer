@@ -98,7 +98,6 @@ int main() {
                 "server", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
 
         spdlog::set_default_logger(logger);
-        spdlog::set_default_logger(logger);
         spdlog::set_level(spdlog::level::info);
 
         spdlog::info("spdlog initialized");

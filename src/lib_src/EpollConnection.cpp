@@ -244,7 +244,7 @@ void EpollConnection::protocol_detected() {
         const size_t len = input_buffer_.readable_bytes();
 
         const size_t check_len = std::min(len, static_cast<size_t>(128));
-        std::string_view peek_view(data, check_len);
+        const std::string_view peek_view(data, check_len);
 
         static const std::vector<std::string_view> http_starts = {"GET ",     "POST ",  "HEAD ",    "PUT ",  "DELETE ",
                                                                   "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "};
@@ -378,15 +378,15 @@ void EpollConnection::send_protobuf(const moderncpp::Response &resp_in) {
         serialized = "empty";
     }
 
-    uint32_t len = htobe32(static_cast<uint32_t>(serialized.size()));
-    std::string prefix(reinterpret_cast<const char *>(&len), 4);
+    const uint32_t len = htobe32(static_cast<uint32_t>(serialized.size()));
+    const std::string prefix(reinterpret_cast<const char *>(&len), 4);
 
     NET_LOG_DEBUG("Sending Protobuf response: len={}, code={}, msg={}", serialized.size(), resp.code(), resp.message());
 
     send(prefix + serialized);
 }
 
-void EpollConnection::send_protobuf_error(int code, const std::string &msg) {
+void EpollConnection::send_protobuf_error(const int code, const std::string &msg) {
     moderncpp::Response resp;
     resp.set_code(code);
     resp.set_message(msg);
