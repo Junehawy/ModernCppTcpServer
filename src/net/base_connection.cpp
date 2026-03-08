@@ -1,4 +1,4 @@
-#include "../../include/BaseConnection.h"
+#include "../../include/net/base_connection.h"
 
 #include <arpa/inet.h>
 

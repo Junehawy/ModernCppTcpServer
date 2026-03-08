@@ -2,7 +2,7 @@
 #include <cstring>
 #include <vector>
 
-#include "config.h"
+#include "../common/config.h"
 
 // Efficient non-contiguous buffer for network I/O with automatic compaction
 class Buffer {
@@ -98,7 +98,7 @@ private:
             if (new_size > MAX_BUFFER_SIZE) {
                 throw std::length_error("Buffer overflow: exceed MAX_BUFFER_SIZE");
             }
-            buffer_.reserve(new_size);
+            buffer_.resize(new_size);
         } else {
             const size_t readable = readable_bytes();
             std::copy(begin() + reader_index_, begin() + writer_index_, begin());

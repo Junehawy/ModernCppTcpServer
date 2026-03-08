@@ -1,10 +1,10 @@
-#include "SubReactor.h"
+#include "../../include/net/sub_reactor.h"
 
 #include <ranges>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-#include "EpollConnection.h"
-#include "config.h"
+#include "../../include/net/epoll_connection.h"
+#include "../../include/common/config.h"
 
 SubReactor::SubReactor(const ClientHandler &clientHandler) : clientHandler_(clientHandler) {
     try {
@@ -175,16 +175,16 @@ void SubReactor::run(const std::stop_token &st) {
                 }
 
                 try {
-                    check_timeouts();
-                } catch (const std::exception &e) {
-                    NET_LOG_ERROR("Exception in check_timeouts: {}", e.what());
-                }
-
-                try {
                     do_pending_functors();
                 } catch (const std::exception &e) {
                     NET_LOG_ERROR("Exception in do_pending_functors: {}", e.what());
                 }
+            }
+
+            try {
+                check_timeouts();
+            } catch (const std::exception &e) {
+                NET_LOG_ERROR("Exception in check_timeouts: {}", e.what());
             }
         }
     } catch (const std::exception &e) {

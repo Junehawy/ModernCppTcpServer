@@ -1,5 +1,5 @@
-#include "../include/tcpClient.h"
-#include "../include/stringUtils.h"
+#include "../../include/net/tcp_client.h"
+#include "../../include/common/string_utils.h"
 #include <iostream>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>

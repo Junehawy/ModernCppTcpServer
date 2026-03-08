@@ -1,0 +1,8 @@
+syntax = "proto3";
+package moderncpp;
+
+import "message.proto";
+service EchoService{
+  rpc Echo (Request) returns (Response);
+  rpc Ping (PingRequest) returns (PingResponse);
+}

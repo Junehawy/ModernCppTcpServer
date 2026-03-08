@@ -5,7 +5,7 @@
 #include <string>
 
 #include "buffer_utils.h"
-#include "config.h"
+#include "../common/config.h"
 #include "net_utils.h"
 
 // Abstract base class for TCP connections

@@ -1,6 +1,6 @@
 #pragma once
-#include "ClientHandler.h"
-#include "EpollConnection.h"
+#include "client_handler.h"
+#include "epoll_connection.h"
 
 // Worker thread managing a subset of connections
 class SubReactor {

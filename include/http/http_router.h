@@ -29,10 +29,9 @@ class HttpRouter {
     SimpleHttpResponse handle(const SimpleHttpRequest& request) {
         SimpleHttpResponse response;
 
-        std::string key = request.method + ":" + request.path;
+        const std::string key = request.method + ":" + request.path;
 
-        auto iter = routes_.find(key);
-        if (iter != routes_.end()) {
+        if (const auto iter = routes_.find(key); iter != routes_.end()) {
             try {
                 iter->second(request,response);
             }catch(const std::exception& e) {
@@ -60,8 +59,7 @@ class HttpRouter {
 
 private:
     void add_route(const std::string& method,const std::string& path,RouterHandler handler) {
-        std::string key = method + ":" + path;
-        routes_[key] = std::move(handler);
+        routes_[method + ":" + path] = std::move(handler);
     }
 
     std::unordered_map<std::string,RouterHandler> routes_;

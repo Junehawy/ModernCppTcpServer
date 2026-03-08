@@ -1,0 +1,20 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+
+    ports:
+      - "9999:9999"
+      - "50051:50051"
+
+    volumes:
+      - ../logs:/app/logs
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: [ "CMD","curl","-f","http://localhost:9999/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3

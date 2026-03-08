@@ -23,3 +23,9 @@ constexpr auto DEFAULT_CONNECT_TIMEOUT = std::chrono::seconds(5);
 
 // TcpServer configuration
 constexpr size_t MAX_ACCEPT_PER_LOOP = 100;
+
+// gRRPC configuration
+constexpr int GRPC_MAX_MESSAGE_SIZE   = 4 * 1024 * 1024;  // 4 MB
+constexpr int GRPC_KEEPALIVE_TIME_MS  = 30000;
+constexpr int GRPC_KEEPALIVE_TIMEOUT_MS = 5000;
+constexpr int GRPC_SHUTDOWN_TIMEOUT_S = 5;

@@ -1,7 +1,7 @@
 #pragma once
 #include <memory>
 
-#include "BaseConnection.h"
+#include "base_connection.h"
 
 class BaseConnection;
 // Factory function: creates connection objects from accepted sockets

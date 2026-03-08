@@ -1,6 +1,6 @@
-#include "../../include/EpollConnection.h"
+#include "../../include/net/epoll_connection.h"
 
-#include "SubReactor.h"
+#include "../../include/net/sub_reactor.h"
 
 EpollConnection::EpollConnection(net_utils::SocketPtr sock, const sockaddr_in addr, MessageHandler handler) :
     BaseConnection(std::move(sock), addr, std::move(handler)) {}

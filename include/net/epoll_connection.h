@@ -1,8 +1,8 @@
 #pragma once
 #include <deque>
 
-#include "BaseConnection.h"
-#include "http_types.h"
+#include "base_connection.h"
+#include "../http/http_types.h"
 #include "message.pb.h"
 
 class SubReactor;

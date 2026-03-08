@@ -1,10 +1,10 @@
-#include "http_types.h"
+#include "../../include/http/http_types.h"
 #include <algorithm>
 #include <sstream>
 
-#include "config.h"
-#include "net_utils.h"
-#include "stringUtils.h"
+#include "../../include/common/config.h"
+#include "../../include//net/net_utils.h"
+#include "../../include/common/string_utils.h"
 
 HttpParser::HttpParser() : state_(State::ExpectRequestLine), body_received_(0) {}
 

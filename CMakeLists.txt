@@ -9,48 +9,69 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-include_directories(include)
-
-find_package(Protobuf REQUIRED)
-
-set(PROTO_FILES
-        proto/message.proto
-)
-
-protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(Dependancies)
+include(ProtoGen)
 
 add_library(tcp_socket STATIC
-        src/lib_src/tcpServer.cpp
-        src/lib_src/tcpClient.cpp
-        src/lib_src/BaseConnection.cpp
-        src/lib_src/EpollConnection.cpp
-        src/lib_src/http_types.cpp
-        src/lib_src/SubReactor.cpp
-        ${PROTO_SRCS}
+        src/net/base_connection.cpp
+        src/net/epoll_connection.cpp
+        src/net/sub_reactor.cpp
+        src/net/tcp_server.cpp
+        src/http/http_types.cpp
 )
-
-target_include_directories(tcp_socket PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
-
-target_link_libraries(tcp_socket PRIVATE pthread)
-
-add_executable(server src/main_server.cpp)
-add_executable(client src/main_client.cpp)
+target_include_directories(tcp_socket PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 target_link_libraries(tcp_socket PUBLIC
         spdlog::spdlog
-        protobuf::libprotobuf
+        pthread
+        proto_lib
+)
+
+add_library(grpc_lib STATIC
+        src/grpc/grpc_server.cpp
+        src/grpc/echo_service_impl.cpp
+)
+target_include_directories(grpc_lib PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(grpc_lib PUBLIC
+        spdlog::spdlog
+        proto_lib
+)
+
+add_executable(server
+        src/server/main.cpp
+        src/server/routes.cpp
 )
 
 target_link_libraries(server PRIVATE
         tcp_socket
-        pthread
-        protobuf::libprotobuf
+        grpc_lib
+)
+
+add_executable(client
+        src/client/main.cpp
+        src/client/tcp_client.cpp
+)
+
+target_include_directories(grpc_lib PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 target_link_libraries(client PRIVATE
-        tcp_socket
         pthread
-        protobuf::libprotobuf
+        spdlog::spdlog
+        proto_lib
 )
 
-add_subdirectory(extern/spdlog)
+add_executable(grpc_client
+        src/client/grpc_client.cpp
+)
+target_link_libraries(grpc_client PRIVATE
+        proto_lib
+        spdlog::spdlog
+)

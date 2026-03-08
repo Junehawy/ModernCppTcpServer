@@ -2,9 +2,9 @@
 #include <netinet/tcp.h>
 #include <thread>
 
-#include "ClientHandler.h"
-#include "EpollConnection.h"
-#include "SubReactor.h"
+#include "client_handler.h"
+#include "epoll_connection.h"
+#include "sub_reactor.h"
 #include "net_utils.h"
 
 // TCP server supporting multiple I/O strategies
