@@ -5,7 +5,7 @@
 // Worker thread managing a subset of connections
 class SubReactor {
 public:
-    explicit SubReactor(const ClientHandler& clientHandler);
+    explicit SubReactor(ClientHandler  clientHandler);
     ~SubReactor();
 
     SubReactor(const SubReactor&) = delete;
@@ -33,10 +33,10 @@ private:
     using TimeoutMap = std::multimap<std::chrono::steady_clock::time_point,int>;
 
     int wake_fd_ = -1;              // eventfd for inter-thread wakeup
+    int timer_fd_ = -1;
     net_utils::EpollFd epoll_fd_;
     ClientHandler clientHandler_;
 
-    mutable std::shared_mutex connection_mutex_;
     ConnectionMap connections_;
     TimeoutMap timeout_map_;
 

@@ -10,36 +10,20 @@ void EpollConnection::handle_read() {
     if (!is_alive())
         return;
 
-    char temp[READ_CHUNK_SIZE];
-
     try {
-        while (true) {
-            // Read data from socket
-            const ssize_t n = ::read(get_fd(), temp, sizeof(temp));
-            if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    break;
-                if (errno == EINTR)
-                    continue;
-                NET_LOG_ERROR("{} read error: {}", get_fd(), strerror(errno));
-                shutdown();
-                return;
-            }
-            if (n == 0) {
-                shutdown();
-                return;
-            }
-
-            input_buffer_.append(temp, n);
-
-            // Save raw data
-            if (has_http_handler()) {
-                current_raw_buffer_.append(temp, n);
-            }
+        int saved_errno = 0;
+        ssize_t total_read = input_buffer_.read_fd(get_fd(), &saved_errno);
+        if (total_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            NET_LOG_ERROR("{} read error: {}", get_fd(), strerror(errno));
+            shutdown();
+            return;
+        }
+        if (total_read == 0) {
+            shutdown();
+            return;
         }
 
         update_active_time();
-
         protocol_detected();
 
         // HTTP mode: incremental parse with pipelining support
@@ -51,10 +35,12 @@ void EpollConnection::handle_read() {
             bool should_close = false;
 
             while (input_buffer_.readable_bytes() > 0 && is_alive()) {
-                const size_t consumed = http_parser_->parse(input_buffer_.peek(), input_buffer_.readable_bytes());
-                input_buffer_.retrieve(consumed);
+                const auto data = input_buffer_.peek();
+                size_t avail = input_buffer_.readable_bytes();
 
-                if (http_parser_->has_error()) {
+                auto result = http_parser_->parse(data, avail);
+
+                if (result.has_error) {
                     NET_LOG_ERROR("HTTP parse error from {}: {}", get_peer_info(),
                                   http_parser_->partial_request().parser_error);
 
@@ -65,19 +51,14 @@ void EpollConnection::handle_read() {
                     return;
                 }
 
-                if (http_parser_->is_complete()) {
+                if (result.is_complete) {
                     try {
                         auto req = http_parser_->get_request();
 
-                        const size_t header_end = current_raw_buffer_.find("\r\n\r\n");
-                        const size_t total_len = (header_end != std::string::npos) ? header_end + 4 + req.body.size()
-                                                                                   : current_raw_buffer_.size();
-
-                        std::string raw_req = current_raw_buffer_.substr(0, total_len);
-                        current_raw_buffer_.erase(0, total_len);
+                        std::string_view raw_view(data + result.request_start_index, result.request_total_len);
 
                         // FIFO
-                        pending_requests_.emplace_back(std::move(req), std::move(raw_req));
+                        pending_requests_.emplace_back(std::move(req), raw_view);
 
                         pipeline_depth_++;
 
@@ -87,7 +68,7 @@ void EpollConnection::handle_read() {
                             return;
                         }
 
-                        if (!pending_requests_.back().first.keep_alive) {
+                        if (!pending_requests_.back().request.keep_alive) {
                             should_close = true;
                         }
                     } catch (const std::exception &e) {
@@ -98,6 +79,8 @@ void EpollConnection::handle_read() {
                 } else {
                     break; // Data is imcomplete
                 }
+
+                input_buffer_.retrieve(result.consumed_bytes);
             }
 
             // Process ready requests in order
@@ -111,7 +94,7 @@ void EpollConnection::handle_read() {
                         // Safely get shared_ptr before calling handler
                         auto self = shared_from_this();
                         auto epoll_self = std::static_pointer_cast<EpollConnection>(self);
-                        http_handler_(epoll_self, req, raw);
+                        http_handler_(epoll_self, req, raw.data());
                     } catch (const std::bad_weak_ptr &e) {
                         NET_LOG_ERROR("Invalid weak_ptr in HTTP handler: {}", e.what());
                         shutdown();

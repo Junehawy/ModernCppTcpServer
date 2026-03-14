@@ -2,19 +2,19 @@
 #include <chrono>
 
 // Buffer configuration
-constexpr size_t MAX_BUFFER_SIZE = 1 << 20;         // 1MB
-constexpr size_t HIGH_WATER_MARK = 640 * 1024;      // 640KB
-constexpr size_t LOW_WATER_MARK = 128 * 1024;       // 128KB
-constexpr size_t INITIAL_BUFFER_SIZE = 16 * 1024;   // 16KB
-constexpr size_t READ_CHUNK_SIZE = 8192;
+constexpr size_t MAX_BUFFER_SIZE = 4 << 20;             // 4MB
+constexpr size_t HIGH_WATER_MARK = 2* 1024 * 1024;      // 2MB
+constexpr size_t LOW_WATER_MARK = 256 * 1024;           // 128KB
+constexpr size_t INITIAL_BUFFER_SIZE = 128 * 1024;      // 16KB
+constexpr size_t READ_CHUNK_SIZE = 65536;
 
 // Epoll configuration
-constexpr int EPOLL_MAX_EVENTS = 1024;
-constexpr auto EPOLL_WAIT_TIMEOUT = std::chrono::milliseconds(200);
+constexpr int EPOLL_MAX_EVENTS = 2048;
+constexpr auto EPOLL_WAIT_TIMEOUT = std::chrono::milliseconds(100);
 
 // Http configuration
-constexpr size_t MAX_HTTP_HEADER_SIZE = 64 * 1024;          // 64KB
-constexpr size_t MAX_HTTP_BODY_SIZE = 100 * 1024 * 1024;    // 100MB
+constexpr size_t MAX_HTTP_HEADER_SIZE = 128 * 1024;             // 128KB
+constexpr size_t MAX_HTTP_BODY_SIZE = 256 * 1024 * 1024;        // 256MB
 constexpr size_t MAX_HTTP_PIPELINE = 100;
 
 // Timeout configuration

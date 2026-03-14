@@ -15,6 +15,11 @@ public:
 
     EpollConnection(net_utils::SocketPtr sock, sockaddr_in addr, MessageHandler handler);
 
+    struct PendingHttpRequest {
+        SimpleHttpRequest request;
+        std::string_view raw_view;
+    };
+
     // Event handlers called by SubReactor on epoll events
     void handle_read();
     void handle_write();
@@ -33,7 +38,7 @@ private:
     std::optional<HttpParser> http_parser_;     // Stateful HTTP parser
     std::string current_raw_buffer_;
 
-    std::deque<std::pair<SimpleHttpRequest, std::string>> pending_requests_;
+    std::deque<PendingHttpRequest> pending_requests_;
     size_t pipeline_depth_ = 0;
 
     bool protocol_determined_ = false;          // Auto-detect HTTP vs line

@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "../common/config.h"
+#include "unistd.h"
 
 // Efficient non-contiguous buffer for network I/O with automatic compaction
 class Buffer {
@@ -79,7 +80,42 @@ public:
         }
     }
 
-    ssize_t read_fd(int fd, int *saved_errno);
+    ssize_t read_fd(int fd, int *saved_errno) {
+        *saved_errno = 0;
+        ssize_t total = 0;
+
+        while (true) {
+            ensure_writable_bytes(READ_CHUNK_SIZE);
+            const ssize_t n = ::read(fd, begin_write(), writable_bytes());
+
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;
+                if (errno == EINTR)
+                    continue;
+                *saved_errno = errno;
+                return total > 0 ? total : -1;
+            }
+            if (n == 0)
+                return total;
+
+            has_written(n);
+            total += n;
+
+            if (static_cast<size_t>(n) < READ_CHUNK_SIZE / 2)
+                break;
+        }
+
+        return total;
+    }
+
+    std::string_view peek_view(size_t len) const {
+        return {peek(),std::min(len,readable_bytes())};
+    }
+
+    std::string_view peek_view() const {
+        return {peek(),readable_bytes()};
+    }
 
 private:
     static constexpr char CRLF[] = "\r\n";
@@ -93,18 +129,25 @@ private:
 
     // Either resize or move data to front to make room
     void make_space(const size_t len) {
-        if (writable_bytes() + prependable_bytes() < len) {
-            const size_t new_size = std::max(buffer_.size() * 2, writer_index_ + len);
-            if (new_size > MAX_BUFFER_SIZE) {
-                throw std::length_error("Buffer overflow: exceed MAX_BUFFER_SIZE");
-            }
-            buffer_.resize(new_size);
-        } else {
-            const size_t readable = readable_bytes();
-            std::copy(begin() + reader_index_, begin() + writer_index_, begin());
+        if (writable_bytes() >= len)
+            return;
 
+        const size_t readable = readable_bytes();
+        constexpr size_t prepend_threshold = 256 * 1024;
+
+        if (prependable_bytes() >= prepend_threshold) {
+            if (readable > 0) {
+                std::memmove(begin(), peek(), readable);
+            }
             reader_index_ = 0;
             writer_index_ = readable;
+        }
+
+        if (writable_bytes() + prependable_bytes() < len) {
+            size_t new_size = buffer_.size() * 3 / 2 + len;
+            new_size = std::max(new_size, INITIAL_BUFFER_SIZE * 2);
+            new_size = std::min(new_size, MAX_BUFFER_SIZE);
+            buffer_.resize(new_size);
         }
     }
 };

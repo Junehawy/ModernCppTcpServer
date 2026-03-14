@@ -54,8 +54,17 @@ public:
     enum class State { ExpectRequestLine, ExpectHeader, ExpectBody, Complete, Error };
 
     HttpParser();
+
+    struct ParseResult {
+        size_t consumed_bytes = 0;
+        bool has_error = false;
+        bool is_complete = false;
+        size_t request_start_index = 0;
+        size_t request_total_len = 0;
+    };
+
     // Feed data incrementally, returns bytes consumed
-    size_t parse(const char *data, size_t len);
+    ParseResult parse(const char *data, size_t len);
 
     bool is_complete() const { return state_ == State::Complete; }
     bool has_error() const { return state_ == State::Error; }
@@ -71,6 +80,7 @@ private:
     SimpleHttpRequest current_req_;     // Accumulating request
     std::string temp_buffer_;           // Partial line buffer
     size_t body_received_;
+    size_t current_request_start_index_;
 
     bool parse_request_line(const std::string &line);
     bool parse_header_line(const std::string &line);

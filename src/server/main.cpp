@@ -46,7 +46,7 @@ static void init_log() {
             "server", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
 
     spdlog::set_default_logger(logger);
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::warn);
 
     spdlog::info("spdlog initialized");
 }

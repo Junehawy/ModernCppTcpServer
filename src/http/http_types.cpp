@@ -16,8 +16,13 @@ void HttpParser::reset() {
 }
 
 // Finite state machine: RequestLine -> Headers -> Body -> Complete
-size_t HttpParser::parse(const char *data, const size_t len) {
+HttpParser::ParseResult HttpParser::parse(const char *data, const size_t len) {
+    ParseResult result;
     size_t consumed = 0;
+
+    if (state_ == State::ExpectRequestLine) {
+        current_request_start_index_ = 0;
+    }
 
     while (consumed < len && state_ != State::Complete && state_ != State::Error) {
         if (state_ == State::ExpectRequestLine || state_ == State::ExpectHeader) {
@@ -28,7 +33,8 @@ size_t HttpParser::parse(const char *data, const size_t len) {
                     state_ = State::Error;
                     current_req_.parser_error = "Header too large";
                 }
-                return len;
+                result.consumed_bytes = len;
+                return result;
             }
 
             const size_t line_len = crlf - (data + consumed);
@@ -40,7 +46,9 @@ size_t HttpParser::parse(const char *data, const size_t len) {
             if (state_ == State::ExpectRequestLine) {
                 if (!parse_request_line(line)) {
                     state_ = State::Error;
-                    return consumed;
+                    result.has_error = true;
+                    result.consumed_bytes = consumed;
+                    return result;
                 }
                 state_ = State::ExpectHeader;
             } else {
@@ -50,11 +58,16 @@ size_t HttpParser::parse(const char *data, const size_t len) {
                         state_ = State::ExpectBody;
                     } else {
                         state_ = State::Complete;
+                        result.is_complete = true;
+                        result.request_start_index = current_request_start_index_;
+                        result.request_total_len = consumed - current_request_start_index_;
                     }
                 } else {
                     if (!parse_header_line(line)) {
                         state_ = State::Error;
-                        return consumed;
+                        result.has_error = true;
+                        result.consumed_bytes = consumed;
+                        return result;
                     }
                 }
             }
@@ -70,10 +83,15 @@ size_t HttpParser::parse(const char *data, const size_t len) {
 
             if (body_received_ >= current_req_.content_length) {
                 state_ = State::Complete;
+                result.is_complete = true;
+                result.request_start_index = current_request_start_index_;
+                result.request_total_len = consumed - current_request_start_index_;
             }
         }
     }
-    return consumed;
+
+    result.consumed_bytes = consumed;
+    return result;
 }
 
 bool HttpParser::parse_request_line(const std::string &line) {
