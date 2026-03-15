@@ -46,7 +46,7 @@ static void init_log() {
             "server", sinks.begin(), sinks.end(), spdlog::thread_pool(), spdlog::async_overflow_policy::block);
 
     spdlog::set_default_logger(logger);
-    spdlog::set_level(spdlog::level::warn);
+    spdlog::set_level(spdlog::level::info);
 
     spdlog::info("spdlog initialized");
 }
@@ -74,7 +74,7 @@ int main() {
     spdlog::info("Routes registered");
 
     try {
-        TcpServer server(9999, 1024,8);
+        TcpServer server(9999, 1024,8,3);
 
         // Start server and define client connection handler
         server.start([&](net_utils::SocketPtr client_fd,

@@ -1,11 +1,12 @@
 #pragma once
 #include "client_handler.h"
+#include "common/worker_pool.h"
 #include "epoll_connection.h"
 
 // Worker thread managing a subset of connections
 class SubReactor {
 public:
-    explicit SubReactor(ClientHandler  clientHandler);
+    explicit SubReactor(ClientHandler  clientHandler,WorkerPool* worker_pool = nullptr);
     ~SubReactor();
 
     SubReactor(const SubReactor&) = delete;
@@ -45,4 +46,6 @@ private:
 
     std::mutex pending_mutex_;
     std::vector<std::function<void()>> pending_functors_;
+
+    WorkerPool* worker_pool_ = nullptr;
 };

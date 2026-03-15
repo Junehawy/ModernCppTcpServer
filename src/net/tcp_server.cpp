@@ -6,10 +6,17 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-TcpServer::TcpServer(const int port, const int backlog, const size_t num_reactors) :
+TcpServer::TcpServer(const int port, const int backlog, const size_t num_reactors,const size_t num_workers) :
     port_(port), backlog_(backlog), num_reactors_(num_reactors) {
 
     try {
+        if (num_workers > 0) {
+            worker_pool_ = std::make_unique<WorkerPool>(num_workers);
+            NET_LOG_INFO("WorkerPool created success and work");
+        }else {
+            NET_LOG_INFO("WorkerPool disabled: handlers will run on IO thread");
+        }
+
         event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
         if (event_fd_ < 0) {
             throw std::runtime_error("Failed to create signalfd");
@@ -100,16 +107,16 @@ void TcpServer::start(const ClientHandler &handler) {
 
     } catch (const std::exception &e) {
         running_ = false;
-        throw;
+        NET_LOG_ERROR("Start exception: {}", e.what());
     }
 }
 
 // single epoll mode
-void TcpServer::start_single_epoll(std::stop_token st) {
+void TcpServer::start_single_epoll(const std::stop_token &st) {
     NET_LOG_INFO("Start singal reactor mode");
 
     try {
-        auto reactor = std::make_unique<SubReactor>(client_handler_);
+        auto reactor = std::make_unique<SubReactor>(client_handler_,worker_pool_.get());
         sub_reactors_.emplace_back(std::move(reactor));
 
         const net_utils::EpollFd accept_fd;
@@ -161,7 +168,7 @@ void TcpServer::start_single_epoll(std::stop_token st) {
     }
 }
 
-void TcpServer::start_multi_epoll(std::stop_token st) {
+void TcpServer::start_multi_epoll(const std::stop_token &st) {
     NET_LOG_INFO("Start_multi_reactor with {} reactors", num_reactors_);
 
     try {
@@ -300,7 +307,7 @@ void TcpServer::shutdown() {
     NET_LOG_DEBUG("=== Graceful shutdown started ===");
 
     try {
-        stop_source_.request_stop();
+        (void)stop_source_.request_stop();
 
         NET_LOG_DEBUG("Closing listening socket...");
         server_fd_.reset();
@@ -319,6 +326,11 @@ void TcpServer::shutdown() {
         }
         sub_reactors_.clear();
 
+        if (worker_pool_) {
+            NET_LOG_DEBUG("Draining worker pool...");
+            worker_pool_.reset();
+            NET_LOG_DEBUG("Worker pool shutdown...");
+        }
 
         net_utils::close_safe(event_fd_);
         event_fd_ = -1;
@@ -332,7 +344,7 @@ void TcpServer::shutdown() {
 
 void TcpServer::wakeup() const {
     try {
-        uint64_t one = 1;
+        constexpr uint64_t one = 1;
         // wake accept
         if (event_fd_ >= 0) {
             ::write(event_fd_, &one, sizeof(one));

@@ -7,7 +7,7 @@
 #include "../../include/common/config.h"
 #include "../../include/net/epoll_connection.h"
 
-SubReactor::SubReactor(ClientHandler clientHandler) : clientHandler_(std::move(clientHandler)) {
+SubReactor::SubReactor(ClientHandler clientHandler,WorkerPool* worker_pool) : clientHandler_(std::move(clientHandler)),worker_pool_(worker_pool) {
     try {
         epoll_fd_ = net_utils::EpollFd();
 
@@ -16,7 +16,7 @@ SubReactor::SubReactor(ClientHandler clientHandler) : clientHandler_(std::move(c
         if (wake_fd_ < 0) {
             throw std::runtime_error("eventfd creation failed");
         }
-        net_utils::epoll_add(epoll_fd_, wake_fd_, EPOLLIN);
+        net_utils::epoll_add(epoll_fd_.get(), wake_fd_, EPOLLIN);
 
         timer_fd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
         if (timer_fd_ < 0) {
@@ -28,7 +28,7 @@ SubReactor::SubReactor(ClientHandler clientHandler) : clientHandler_(std::move(c
         ts.it_interval.tv_sec = 5; // pre 5s
         timerfd_settime(timer_fd_, 0, &ts, nullptr);
 
-        net_utils::epoll_add(epoll_fd_, timer_fd_, EPOLLIN);
+        net_utils::epoll_add(epoll_fd_.get(), timer_fd_, EPOLLIN);
 
         thread_ = std::jthread([this](const std::stop_token &st) { run(st); });
     } catch (...) {
@@ -82,6 +82,10 @@ void SubReactor::add_connection(net_utils::SocketPtr client_fd, const sockaddr_i
 
         epoll_conn->attch_reactor(this);
 
+        if (worker_pool_) {
+            epoll_conn->set_worker_pool(worker_pool_);
+        }
+
         // Queue functor to execute in reactor thread
         {
             std::lock_guard lock(pending_mutex_);
@@ -123,7 +127,7 @@ void SubReactor::run(const std::stop_token &st) {
 
     try {
         while (!st.stop_requested()) {
-            const int nfds = epoll_wait(epoll_fd_, events, EPOLL_MAX_EVENTS, -1);
+            const int nfds = epoll_wait(epoll_fd_.get(), events, EPOLL_MAX_EVENTS, -1);
             if (nfds < 0) {
                 if (errno == EINTR)
                     continue;
@@ -296,6 +300,9 @@ void SubReactor::disable_writing(int fd) {
             }
         });
     }
+
+    constexpr uint64_t one = 1;
+    ::write(wake_fd_, &one, sizeof(one));
 }
 
 void SubReactor::close_connection(const int fd) {
@@ -369,7 +376,7 @@ void SubReactor::check_timeouts() {
             if (conn) {
                 NET_LOG_WARN("Idle timeout for {}, closing", conn->get_peer_info());
                 try {
-                    conn->shutdown();
+                    close_connection(fd);
                 } catch (const std::exception &e) {
                     NET_LOG_ERROR("Exception shutting down timed out connection: {}", e.what());
                 }

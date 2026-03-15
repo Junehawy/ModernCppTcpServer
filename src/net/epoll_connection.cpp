@@ -10,9 +10,14 @@ void EpollConnection::handle_read() {
     if (!is_alive())
         return;
 
+    NET_LOG_DEBUG("handle_read called, fd={}, buffer_bytes={}", get_fd(), input_buffer_.readable_bytes());
+
     try {
         int saved_errno = 0;
-        ssize_t total_read = input_buffer_.read_fd(get_fd(), &saved_errno);
+        const ssize_t total_read = input_buffer_.read_fd(get_fd(), &saved_errno);
+        NET_LOG_DEBUG("read_fd returned={}, saved_errno={}, buffer_bytes_after={}", total_read, saved_errno,
+                      input_buffer_.readable_bytes());
+
         if (total_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             NET_LOG_ERROR("{} read error: {}", get_fd(), strerror(errno));
             shutdown();
@@ -26,6 +31,9 @@ void EpollConnection::handle_read() {
         update_active_time();
         protocol_detected();
 
+        NET_LOG_DEBUG("dispatch: http={} proto={} has_handler={}", use_http_mode_, use_protobuf_mode_,
+                      has_http_handler());
+
         // HTTP mode: incremental parse with pipelining support
         if (use_http_mode_ || has_http_handler()) {
             if (!http_parser_.has_value()) {
@@ -36,9 +44,9 @@ void EpollConnection::handle_read() {
 
             while (input_buffer_.readable_bytes() > 0 && is_alive()) {
                 const auto data = input_buffer_.peek();
-                size_t avail = input_buffer_.readable_bytes();
+                const size_t avail = input_buffer_.readable_bytes();
 
-                auto result = http_parser_->parse(data, avail);
+                const auto result = http_parser_->parse(data, avail);
 
                 if (result.has_error) {
                     NET_LOG_ERROR("HTTP parse error from {}: {}", get_peer_info(),
@@ -83,6 +91,8 @@ void EpollConnection::handle_read() {
                 input_buffer_.retrieve(result.consumed_bytes);
             }
 
+            const bool using_worker_pool = (worker_pool_ != nullptr);
+
             // Process ready requests in order
             while (!pending_requests_.empty() && is_alive()) {
                 auto [req, raw] = std::move(pending_requests_.front());
@@ -93,25 +103,56 @@ void EpollConnection::handle_read() {
                     try {
                         // Safely get shared_ptr before calling handler
                         auto self = shared_from_this();
-                        auto epoll_self = std::static_pointer_cast<EpollConnection>(self);
-                        http_handler_(epoll_self, req, raw.data());
+                        const auto epoll_self = std::static_pointer_cast<EpollConnection>(self);
+
+                        if (using_worker_pool) {
+                            std::string raw_copy{raw.data(), raw.size()};
+                            const bool close_after = !req.keep_alive;
+
+                            worker_pool_->submit([epoll_self, req = std::move(req), raw_copy = std::move(raw_copy),
+                                                  close_after]() mutable {
+                                if (!epoll_self->is_alive())
+                                    return;
+
+                                try {
+                                    epoll_self->http_handler_(epoll_self, req, raw_copy);
+                                } catch (const std::exception &e) {
+                                    NET_LOG_ERROR("Worker HTTP handler exception from {}: {}",
+                                                  epoll_self->get_peer_info(), e.what());
+                                    static const std::string err = "HTTP/1.1 500 Internal Server Error\r\n"
+                                                                   "Content-Length:0\r\nConnection: close\r\n\r\n";
+                                    epoll_self->send(err);
+                                    epoll_self->shutdown();
+                                    return;
+                                }
+                                if (close_after) {
+                                    epoll_self->shutdown();
+                                }
+                            });
+                        } else {
+                            try {
+                                http_handler_(epoll_self, req, raw.data());
+                            } catch (const std::exception &e) {
+                                NET_LOG_ERROR("HTTP handler exception from {}: {}", get_peer_info(), e.what());
+                                // Continue processing - don't kill connection for handler errors
+                                static const std::string error_response =
+                                        "HTTP/1.1 500 Internal Server Error\r\nContent-Length:0\r\nConnection: "
+                                        "close\r\n\r\n";
+                                send(error_response);
+                                should_close = true;
+                            }
+                        }
+
                     } catch (const std::bad_weak_ptr &e) {
                         NET_LOG_ERROR("Invalid weak_ptr in HTTP handler: {}", e.what());
                         shutdown();
                         return;
-                    } catch (const std::exception &e) {
-                        NET_LOG_ERROR("HTTP handler exception from {}: {}", get_peer_info(), e.what());
-                        // Continue processing - don't kill connection for handler errors
-                        static const std::string error_response =
-                                "HTTP/1.1 500 Internal Server Error\r\nContent-Length:0\r\nConnection: close\r\n\r\n";
-                        send(error_response);
-                        should_close = true;
+                    }
+
+                    if (!using_worker_pool && should_close && pending_requests_.empty()) {
+                        shutdown();
                     }
                 }
-            }
-
-            if (should_close && pending_requests_.empty()) {
-                shutdown();
             }
         } else if (use_protobuf_mode_) {
             handle_protobuf();
@@ -129,6 +170,8 @@ void EpollConnection::handle_read() {
 
 // Split buffer by newlines and invoke handler per line
 void EpollConnection::handle_line_protocol() {
+    NET_LOG_DEBUG("line_protocol: readable={}, msg_handler={}", input_buffer_.readable_bytes(),
+                  message_handler_ ? "valid" : "NULL");
     try {
         while (true) {
             const char *eol = input_buffer_.find_eol();
@@ -276,8 +319,7 @@ void EpollConnection::protocol_detected() {
         if (looks_text) {
             protocol_determined_ = true;
             use_protobuf_mode_ = false;
-            spdlog::info("{} fallback to text/line protocol", get_peer_info());
-            handle_line_protocol();
+            NET_LOG_INFO("{} using line protocol", get_peer_info());
             return;
         }
 

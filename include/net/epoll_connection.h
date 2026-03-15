@@ -1,8 +1,9 @@
 #pragma once
 #include <deque>
 
-#include "base_connection.h"
 #include "../http/http_types.h"
+#include "base_connection.h"
+#include "common/worker_pool.h"
 #include "message.pb.h"
 
 class SubReactor;
@@ -33,6 +34,8 @@ public:
     void attch_reactor(SubReactor *reactor) { reactor_ = reactor; }
     void buffer_output() override;
 
+    void set_worker_pool(WorkerPool *worker_pool) { worker_pool_ = worker_pool; }
+
 private:
     HttpHandler http_handler_;                  // HTTP callback
     std::optional<HttpParser> http_parser_;     // Stateful HTTP parser
@@ -49,6 +52,8 @@ private:
     bool length_read_ = false;
     uint32_t expected_length_ = 0;
     std::string current_pb_buffer_;
+
+    WorkerPool *worker_pool_ = nullptr;
 
     void handle_protobuf();
     void handle_protobuf_request(const moderncpp::Request &req);

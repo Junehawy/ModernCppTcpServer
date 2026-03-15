@@ -10,7 +10,7 @@
 // TCP server supporting multiple I/O strategies
 class TcpServer {
 public:
-    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, size_t num_reactors = 1);
+    explicit TcpServer(int port = 9999, int backlog = SOMAXCONN, size_t num_reactors = 1,size_t num_workers = 4);
     ~TcpServer();
 
     TcpServer(const TcpServer &) = delete;
@@ -35,8 +35,8 @@ private:
 
     int event_fd_ = -1;
 
-    void start_single_epoll(std::stop_token st);
-    void start_multi_epoll(std::stop_token st);
+    void start_single_epoll(const std::stop_token &st);
+    void start_multi_epoll(const std::stop_token &st);
 
     [[nodiscard]] bool handle_accept() const;
     void wakeup() const;
@@ -44,4 +44,6 @@ private:
 
     std::vector<std::unique_ptr<SubReactor>> sub_reactors_;
     std::atomic<size_t> next_reactor_index_{0};     // Round-robin distribution
+
+    std::unique_ptr<WorkerPool> worker_pool_;
 };

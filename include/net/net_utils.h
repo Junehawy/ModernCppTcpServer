@@ -22,7 +22,7 @@ namespace net_utils {
         int error_code() const { return err_; }
 
         const char *what() const noexcept override {
-            static thread_local std::string buf;
+            thread_local std::string buf;
             buf = std::format("[{}:{} {}] {} (errno:{} {})", loc_.file_name(), loc_.line(), loc_.function_name(),
                               std::runtime_error::what(), err_, strerror(err_));
             return buf.c_str();
@@ -39,13 +39,13 @@ namespace net_utils {
 #define NET_LOG_INFO(fmt, ...) spdlog::info(fmt, ##__VA_ARGS__)
 #define NET_LOG_DEBUG(fmt, ...) spdlog::debug(fmt, ##__VA_ARGS__)
 
-    inline void check_syscall(int ret, const std::string &op,
+    inline void check_syscall(const int ret, const std::string &op,
                               std::source_location loc = std::source_location::current(), bool fatal = true) {
         if (ret >= 0)
             return;
 
-        int e = errno;
-        std::string desc = (e == 0) ? "N/A" : strerror(e);
+        const int e = errno;
+        const std::string desc = (e == 0) ? "N/A" : strerror(e);
         std::string msg = op + " failed: " + desc;
 
         if (fatal) {
@@ -58,14 +58,14 @@ namespace net_utils {
 
     // Socket encapsulation
     inline bool set_nonblocking(const int fd) {
-        int flags = fcntl(fd, F_GETFL, 0);
+        const int flags = fcntl(fd, F_GETFL, 0);
         check_syscall(flags, "fnctl F_GETFL");
         check_syscall(fcntl(fd, F_SETFL, flags | O_NONBLOCK), "fnctl F_SETFL");
         return true;
     }
 
     inline bool set_reuse_addr(const int fd) {
-        int opt = 1;
+        constexpr int opt = 1;
         check_syscall(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)), "setsockopt SO_REUSEADDR");
         return true;
     }
@@ -81,7 +81,7 @@ namespace net_utils {
         }
     }
 
-    inline ssize_t writen(int fd, const void *buf, size_t count) {
+    inline ssize_t writen(const int fd, const void *buf, size_t count) {
         size_t nleft = count;
         auto ptr = static_cast<const char *>(buf);
 
@@ -101,12 +101,12 @@ namespace net_utils {
         return count;
     }
 
-    inline ssize_t readn(int fd, void *buf, size_t count) {
+    inline ssize_t readn(const int fd, void *buf, size_t count) {
         size_t nleft = count;
-        char *ptr = static_cast<char *>(buf);
+        auto ptr = static_cast<char *>(buf);
 
         while (nleft > 0) {
-            ssize_t nread = read(fd, ptr, nleft);
+            const ssize_t nread = read(fd, ptr, nleft);
             if (nread < 0) {
                 if (errno == EINTR)
                     continue;
@@ -124,7 +124,7 @@ namespace net_utils {
 
     // Epoll encapsulation
     inline int epoll_create() {
-        int epfd = epoll_create1(0);
+        const int epfd = epoll_create1(0);
         check_syscall(epfd, "epoll_create1");
         return epfd;
     }
@@ -209,7 +209,7 @@ namespace net_utils {
             return *this;
         }
         int get() const noexcept { return fd_; }
-        operator int() const noexcept { return fd_; }
+        explicit operator int() const noexcept { return fd_; }
 
     private:
         int fd_;

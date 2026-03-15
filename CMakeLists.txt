@@ -19,6 +19,7 @@ add_library(tcp_socket STATIC
         src/net/sub_reactor.cpp
         src/net/tcp_server.cpp
         src/http/http_types.cpp
+        src/common/worker_pool.cpp
 )
 target_include_directories(tcp_socket PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
