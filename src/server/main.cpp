@@ -1,6 +1,6 @@
+#include <csignal>
 #include <iostream>
 #include <mutex>
-#include <csignal>
 #include <spdlog/async.h>
 #include <spdlog/sinks/rotating_file_sink-inl.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -15,11 +15,12 @@
 #include "router.h"
 
 static HttpRouter g_router;
+ServerMetrics g_metrics;
+WorkerPool *g_worker_pool = nullptr;
 
 // HTTP request handler called from EpollConnection
-static void handle_http_request(const std::shared_ptr<EpollConnection>& conn,
-                        const SimpleHttpRequest& req,
-                        const std::string& raw_request) {
+static void handle_http_request(const std::shared_ptr<EpollConnection> &conn, const SimpleHttpRequest &req,
+                                const std::string &raw_request) {
     spdlog::info("[HTTP] {} {} from {}", req.method, req.path, conn->get_peer_info());
 
     const SimpleHttpResponse response = g_router.handle(req);
@@ -74,7 +75,8 @@ int main() {
     spdlog::info("Routes registered");
 
     try {
-        TcpServer server(9999, 1024,8,3);
+        TcpServer server(9999, 1024, 8, 4, 10000);
+        server.set_metrics(&g_metrics);
 
         // Start server and define client connection handler
         server.start([&](net_utils::SocketPtr client_fd,
@@ -86,8 +88,10 @@ int main() {
                                                               self->send(response);
                                                           });
 
+            g_worker_pool = server.get_worker_pool();
+
             // Set http hadnler
-            conn ->set_http_handler(handle_http_request);
+            conn->set_http_handler(handle_http_request);
 
             // Enable 60-second idle timeout
             conn->enable_idle_timeout(true);

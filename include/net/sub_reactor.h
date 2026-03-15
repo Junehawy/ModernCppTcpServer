@@ -1,12 +1,13 @@
 #pragma once
 #include "client_handler.h"
+#include "common/server_metrics.h"
 #include "common/worker_pool.h"
 #include "epoll_connection.h"
 
 // Worker thread managing a subset of connections
 class SubReactor {
 public:
-    explicit SubReactor(ClientHandler  clientHandler,WorkerPool* worker_pool = nullptr);
+    explicit SubReactor(ClientHandler  clientHandler,WorkerPool* worker_pool = nullptr,ServerMetrics *metrics = nullptr);
     ~SubReactor();
 
     SubReactor(const SubReactor&) = delete;
@@ -23,6 +24,8 @@ public:
     void disable_writing(int fd);
 
     int get_wake_fd() const {return wake_fd_;}
+    size_t connection_count() const {return connections_.size();}
+
 private:
     void run(const std::stop_token &st);   // Main epoll loop
     void do_pending_functors();     // Execute queued lambdas
@@ -33,8 +36,8 @@ private:
     using ConnectionMap = std::unordered_map<int,std::shared_ptr<EpollConnection>>;
     using TimeoutMap = std::multimap<std::chrono::steady_clock::time_point,int>;
 
-    int wake_fd_ = -1;              // eventfd for inter-thread wakeup
-    int timer_fd_ = -1;
+    int wake_fd_{-1};             // eventfd for inter-thread wakeup
+    int timer_fd_{-1};
     net_utils::EpollFd epoll_fd_;
     ClientHandler clientHandler_;
 
@@ -47,5 +50,6 @@ private:
     std::mutex pending_mutex_;
     std::vector<std::function<void()>> pending_functors_;
 
-    WorkerPool* worker_pool_ = nullptr;
+    WorkerPool* worker_pool_{nullptr};
+    ServerMetrics *metrics_{nullptr};
 };

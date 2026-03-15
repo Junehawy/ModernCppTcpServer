@@ -7,7 +7,7 @@
 #include "../../include/common/config.h"
 #include "../../include/net/epoll_connection.h"
 
-SubReactor::SubReactor(ClientHandler clientHandler,WorkerPool* worker_pool) : clientHandler_(std::move(clientHandler)),worker_pool_(worker_pool) {
+SubReactor::SubReactor(ClientHandler clientHandler,WorkerPool* worker_pool,ServerMetrics *metrics) : clientHandler_(std::move(clientHandler)),worker_pool_(worker_pool),metrics_(metrics) {
     try {
         epoll_fd_ = net_utils::EpollFd();
 
@@ -103,6 +103,10 @@ void SubReactor::add_connection(net_utils::SocketPtr client_fd, const sockaddr_i
                     }
 
                     connections_[fd] = std::move(epoll_conn);
+
+                    if (metrics_) {
+                        metrics_->active_connections.fetch_add(1,std::memory_order_relaxed);
+                    }
 
                     auto timeout_at = std::chrono::steady_clock::now() + connections_[fd]->get_idle_timeout();
                     timeout_map_.insert({timeout_at, fd});
@@ -339,6 +343,11 @@ void SubReactor::close_connection(const int fd) {
                 NET_LOG_ERROR("Exception during connection shutdown for fd {}: {}", fd, e.what());
             }
         }
+
+        if (metrics_) {
+            metrics_->active_connections.fetch_sub(1,std::memory_order_relaxed);
+        }
+
     } catch (const std::exception &e) {
         NET_LOG_ERROR("Exception in close_connection for fd {}: {}", fd, e.what());
     }
@@ -439,6 +448,10 @@ void SubReactor::shutdown() {
                     }
                 } catch (const std::exception &e) {
                     NET_LOG_ERROR("Exception shutting down connection fd {}: {}", fd, e.what());
+                }
+
+                if (metrics_) {
+                    metrics_->active_connections.fetch_sub(1,std::memory_order_relaxed);
                 }
             }
             connections_.clear();

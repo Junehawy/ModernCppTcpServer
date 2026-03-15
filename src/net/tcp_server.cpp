@@ -6,14 +6,14 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-TcpServer::TcpServer(const int port, const int backlog, const size_t num_reactors,const size_t num_workers) :
-    port_(port), backlog_(backlog), num_reactors_(num_reactors) {
-
+TcpServer::TcpServer(const int port, const int backlog, const size_t num_reactors, const size_t num_workers,
+                     const size_t max_connections) :
+    port_(port), backlog_(backlog), num_reactors_(num_reactors), max_connections_(max_connections) {
     try {
         if (num_workers > 0) {
             worker_pool_ = std::make_unique<WorkerPool>(num_workers);
             NET_LOG_INFO("WorkerPool created success and work");
-        }else {
+        } else {
             NET_LOG_INFO("WorkerPool disabled: handlers will run on IO thread");
         }
 
@@ -63,6 +63,31 @@ TcpServer::~TcpServer() {
     }
 }
 
+bool TcpServer::check_connection_limit(int fd) const {
+    if (max_connections_ == 0)
+        return true;
+
+    const int64_t active = metrics_ ? metrics_->active_connections.load() : 0;
+    if (active < max_connections_)
+        return true;
+
+    static auto resp503 = "HTTP/1.1 503 Service Unavailable\r\n"
+                          "Content-Length: 28\r\n"
+                          "Connection: close\r\n"
+                          "\r\n"
+                          "Connection limit exceeded.\r\n";
+
+    ::write(fd, resp503, std::strlen(resp503));
+    net_utils::close_safe(fd);
+
+    if (metrics_) {
+        metrics_->rejected_connections.fetch_add(1, std::memory_order_relaxed);
+    }
+    NET_LOG_WARN("Connection limit reached (active={}/max={}), rejecting fd={}", active, max_connections_, fd);
+
+    return false;
+}
+
 // Start server: choose singal/multi mode
 void TcpServer::start(const ClientHandler &handler) {
     if (!handler) {
@@ -72,22 +97,24 @@ void TcpServer::start(const ClientHandler &handler) {
     try {
         client_handler_ = handler;
         running_ = true;
-
         auto token = get_stop_token();
 
         if (num_reactors_ <= 1) {
-            accept_thread_ = std::jthread([this,token](std::stop_token) {
-                try {
-                    start_single_epoll(token);
-                } catch (const std::exception &e) {
-                    NET_LOG_ERROR("Exception in single epoll mode: {}", e.what());
-                    running_ = false;
-                }
-            },token);
+            accept_thread_ = std::jthread(
+                    [this, token](std::stop_token) {
+                        try {
+                            start_single_epoll(token);
+                        } catch (const std::exception &e) {
+                            NET_LOG_ERROR("Exception in single epoll mode: {}", e.what());
+                            running_ = false;
+                        }
+                    },
+                    token);
         } else {
             try {
                 for (size_t i = 0; i < num_reactors_; ++i) {
-                    sub_reactors_.emplace_back(std::make_unique<SubReactor>(client_handler_));
+                    sub_reactors_.emplace_back(
+                            std::make_unique<SubReactor>(client_handler_, worker_pool_.get(), metrics_));
                 }
             } catch (const std::exception &e) {
                 NET_LOG_ERROR("Failed to create sub-reactors: {}", e.what());
@@ -95,14 +122,16 @@ void TcpServer::start(const ClientHandler &handler) {
                 throw;
             }
 
-            accept_thread_ = std::jthread([this,token](std::stop_token) {
-                try {
-                    start_multi_epoll(token);
-                } catch (const std::exception &e) {
-                    NET_LOG_ERROR("Exception in multi epoll mode: {}", e.what());
-                    running_ = false;
-                }
-            },token);
+            accept_thread_ = std::jthread(
+                    [this, token](std::stop_token) {
+                        try {
+                            start_multi_epoll(token);
+                        } catch (const std::exception &e) {
+                            NET_LOG_ERROR("Exception in multi epoll mode: {}", e.what());
+                            running_ = false;
+                        }
+                    },
+                    token);
         }
 
     } catch (const std::exception &e) {
@@ -116,7 +145,7 @@ void TcpServer::start_single_epoll(const std::stop_token &st) {
     NET_LOG_INFO("Start singal reactor mode");
 
     try {
-        auto reactor = std::make_unique<SubReactor>(client_handler_,worker_pool_.get());
+        auto reactor = std::make_unique<SubReactor>(client_handler_, worker_pool_.get(), metrics_);
         sub_reactors_.emplace_back(std::move(reactor));
 
         const net_utils::EpollFd accept_fd;
@@ -169,7 +198,8 @@ void TcpServer::start_single_epoll(const std::stop_token &st) {
 }
 
 void TcpServer::start_multi_epoll(const std::stop_token &st) {
-    NET_LOG_INFO("Start_multi_reactor with {} reactors", num_reactors_);
+    NET_LOG_INFO("Start_multi_reactor with {} reactors, worker_pool={}, max_connections={}", num_reactors_,
+                 worker_pool_ ? "on" : "off", max_connections_);
 
     try {
         const net_utils::EpollFd accept_fd;
@@ -216,6 +246,11 @@ void TcpServer::start_multi_epoll(const std::stop_token &st) {
                                 break;
                             }
 
+                            if (!check_connection_limit(conn_fd)) {
+                                accept_count++;
+                                continue;
+                            }
+
                             try {
                                 net_utils::SocketPtr client_fd{new net_utils::SocketFd(conn_fd),
                                                                net_utils::SocketDeleter{}};
@@ -233,6 +268,8 @@ void TcpServer::start_multi_epoll(const std::stop_token &st) {
                                 const size_t index = next_reactor_index_++ % num_reactors_;
                                 sub_reactors_[index]->add_connection(std::move(client_fd), client_addr);
                                 accept_count++;
+                                if (metrics_)
+                                    metrics_->total_connections.fetch_add(1, std::memory_order_relaxed);
                             } catch (const std::exception &e) {
                                 NET_LOG_ERROR("Exception adding connection: {}", e.what());
                                 net_utils::close_safe(conn_fd);
@@ -276,25 +313,28 @@ bool TcpServer::handle_accept() const {
             return false;
         }
 
+        if (!check_connection_limit(client_raw_fd))
+            return true;
+
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
         NET_LOG_INFO("New connection from {}:{}", client_ip, ntohs(client_addr.sin_port));
 
+        if (metrics_) {
+            metrics_->total_connections.fetch_add(1, std::memory_order_relaxed);
+        }
+
         try {
             net_utils::SocketPtr client_fd{new net_utils::SocketFd(client_raw_fd), net_utils::SocketDeleter{}};
-
             sub_reactors_[0]->add_connection(std::move(client_fd), client_addr);
-
             return true;
         } catch (const std::exception &e) {
             NET_LOG_ERROR("Failed to accept connection: {}", e.what());
             net_utils::close_safe(client_raw_fd);
-
             return false;
         }
     } catch (const std::exception &e) {
         NET_LOG_ERROR("Exception in handle_accept: {}", e.what());
-
         return false;
     }
 }
@@ -307,7 +347,7 @@ void TcpServer::shutdown() {
     NET_LOG_DEBUG("=== Graceful shutdown started ===");
 
     try {
-        (void)stop_source_.request_stop();
+        (void) stop_source_.request_stop();
 
         NET_LOG_DEBUG("Closing listening socket...");
         server_fd_.reset();
